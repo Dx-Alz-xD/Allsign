@@ -3,6 +3,7 @@ node_modules/
 frontend/.next/
 frontend/out/
 frontend/dist/
+frontend/dist-electron/
 *.log
 
 # Python & ML
@@ -17,3 +18,8 @@ backend/data/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Env & TypeScript
+.env.local
+.env.*.local
+*.tsbuildinfo

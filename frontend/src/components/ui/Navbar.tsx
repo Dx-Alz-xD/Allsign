@@ -1,0 +1,87 @@
+'use client';
+
+import type { RefObject } from 'react';
+import { AudioWaveform, Menu, Mic, MicOff, Settings, X } from 'lucide-react';
+import type { ProfileMode } from '@shared/types';
+import { ProfileSwitcher } from '@/components/ui/ProfileSwitcher';
+import { cn } from '@/lib/cn';
+
+interface NavbarProps {
+  profile: ProfileMode;
+  onProfileChange: (profile: ProfileMode) => void;
+  navOpen: boolean;
+  onToggleNav: () => void;
+  menuButtonRef: RefObject<HTMLButtonElement>;
+  muted: boolean;
+  onToggleMute: () => void;
+  onOpenSettings: () => void;
+}
+
+export function Navbar({
+  profile,
+  onProfileChange,
+  navOpen,
+  onToggleNav,
+  menuButtonRef,
+  muted,
+  onToggleMute,
+  onOpenSettings,
+}: NavbarProps) {
+  return (
+    <header className="sticky top-0 z-40 h-16 border-b border-white/10 bg-void/70 backdrop-blur-xl">
+      <div className="flex h-full items-center gap-2 px-4 sm:gap-3 sm:px-6">
+        <button
+          ref={menuButtonRef}
+          type="button"
+          aria-label="Menu"
+          aria-expanded={navOpen}
+          aria-controls="mobile-nav"
+          onClick={onToggleNav}
+          className="inline-flex size-10 items-center justify-center rounded-lg text-ink hover:bg-white/10 lg:hidden"
+        >
+          {navOpen ? <X aria-hidden className="size-5" /> : <Menu aria-hidden className="size-5" />}
+        </button>
+
+        <div className="flex min-w-0 items-center gap-2.5">
+          <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-neon-edge shadow-neon-soft">
+            <AudioWaveform aria-hidden className="size-5 text-void" strokeWidth={2.5} />
+          </span>
+          <span className="hidden font-display text-lg font-bold tracking-tight text-ink sm:inline">
+            OmniVoice OS
+          </span>
+        </div>
+
+        <div className="ml-auto flex items-center gap-2 sm:gap-3">
+          <button
+            type="button"
+            aria-label="Settings"
+            onClick={onOpenSettings}
+            className="hidden size-10 items-center justify-center rounded-xl border border-white/[0.12] bg-white/[0.06] text-mist transition-colors hover:border-neon-cyan/40 hover:text-ink sm:inline-flex"
+          >
+            <Settings aria-hidden className="size-[18px]" />
+          </button>
+          <button
+            type="button"
+            aria-label="Mute microphone"
+            aria-pressed={muted}
+            onClick={onToggleMute}
+            className={cn(
+              'inline-flex h-10 min-w-10 items-center justify-center gap-2 rounded-xl border px-2.5 transition-colors',
+              muted
+                ? 'border-warn/60 bg-warn/10 text-warn'
+                : 'border-white/[0.12] bg-white/[0.06] text-mist hover:border-neon-cyan/40 hover:text-ink',
+            )}
+          >
+            {muted ? <MicOff aria-hidden className="size-[18px]" /> : <Mic aria-hidden className="size-[18px]" />}
+            {muted && (
+              <span aria-hidden className="hidden font-display text-sm font-semibold sm:inline">
+                Muted
+              </span>
+            )}
+          </button>
+          <ProfileSwitcher value={profile} onChange={onProfileChange} />
+        </div>
+      </div>
+    </header>
+  );
+}

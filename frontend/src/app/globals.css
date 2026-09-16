@@ -1,0 +1,111 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+    scrollbar-color: rgba(148, 197, 255, 0.28) transparent;
+    --color-void: 11 15 23;
+    --color-panel: 15 20 29;
+    --color-ink: 232 241 255;
+    --color-mist: 169 184 204;
+    --color-dim: 133 148 168;
+    --color-warn: 255 200 87;
+    --color-neon-cyan: 0 242 254;
+    --color-neon-blue: 79 172 254;
+  }
+
+  /* High contrast: every text color is at least 7:1 on black (WCAG 2.1 AAA). */
+  :root[data-contrast='high'] {
+    scrollbar-color: rgb(255 255 255 / 0.7) black;
+    --color-void: 0 0 0;
+    --color-panel: 0 0 0;
+    --color-ink: 255 255 255;
+    --color-mist: 230 237 247;
+    --color-dim: 201 211 224;
+    --color-warn: 255 211 77;
+    --color-neon-blue: 124 196 255;
+  }
+
+  body {
+    @apply min-h-dvh bg-void font-sans text-ink antialiased;
+    background-image:
+      radial-gradient(60rem 40rem at 0% 0%, rgba(0, 242, 254, 0.08), transparent 60%),
+      radial-gradient(50rem 36rem at 100% 100%, rgba(79, 172, 254, 0.09), transparent 60%),
+      linear-gradient(rgba(148, 197, 255, 0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(148, 197, 255, 0.035) 1px, transparent 1px);
+    background-size: auto, auto, 40px 40px, 40px 40px;
+    background-attachment: fixed;
+  }
+
+  h1,
+  h2,
+  h3 {
+    @apply font-display tracking-tight;
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(var(--color-neon-cyan));
+    outline-offset: 2px;
+  }
+
+  ::selection {
+    background: rgb(var(--color-neon-cyan) / 0.3);
+    color: rgb(var(--color-ink));
+  }
+}
+
+@layer components {
+  .glass {
+    @apply border border-white/10 bg-white/[0.06] backdrop-blur-xl;
+  }
+
+  .glass-strong {
+    @apply border border-white/[0.12] bg-white/10 backdrop-blur-2xl;
+  }
+
+  .skip-link {
+    @apply sr-only;
+  }
+
+  .skip-link:focus {
+    @apply not-sr-only fixed left-4 top-4 z-[100] rounded-lg bg-neon-cyan px-4 py-2 font-bold text-void;
+  }
+}
+
+/*
+ * High-contrast overrides. Kept outside @layer so they win over utilities with the same specificity:
+ * decorative translucency and blur are replaced with solid black and clearly visible borders.
+ */
+:root[data-contrast='high'] body {
+  background-image: none;
+}
+
+:root[data-contrast='high'] .glass,
+:root[data-contrast='high'] .glass-strong {
+  background-color: rgb(0 0 0);
+  border-color: rgb(255 255 255 / 0.6);
+  backdrop-filter: none;
+}
+
+:root[data-contrast='high'] [class*='border-white/'] {
+  border-color: rgb(255 255 255 / 0.6);
+}
+
+:root[data-contrast='high'] [aria-invalid='true'] {
+  border-color: rgb(var(--color-warn));
+}
+
+:root[data-contrast='high'] [class*='divide-white/'] > :not([hidden]) ~ :not([hidden]) {
+  border-color: rgb(255 255 255 / 0.6);
+}
+
+:root[data-contrast='high'] [class*='ring-white/'] {
+  --tw-ring-color: rgb(255 255 255 / 0.6);
+}
+
+:root[data-contrast='high'] :focus-visible {
+  outline-width: 3px;
+  outline-offset: 3px;
+}

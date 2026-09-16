@@ -4,11 +4,28 @@ import { useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Timer } from 'lucide-react';
 import type { GrammarResponse } from '@shared/types';
+import type { GrammarSource } from '@/components/providers/SessionProvider';
 import { DISFLUENCY_LABELS, classifyToken } from '@/lib/hud/disfluency';
 import { describeTag, parseBracketedTree, type SyntaxNode } from '@/lib/hud/syntaxTree';
 import { cn } from '@/lib/cn';
 
-export function TextReconstruction({ grammar }: { grammar: GrammarResponse | null }) {
+const SOURCE_LABELS: Record<GrammarSource, string> = {
+  manual: 'Typed',
+  'system-dictation': 'Dictated',
+  demo: 'Demo sentence, parsed live by the grammar server',
+  simulated: 'Simulated: the grammar server is offline',
+};
+
+interface TextReconstructionProps {
+  grammar: GrammarResponse | null;
+  /** speech.worker request start to parsed response. */
+  roundTripMs?: number | null;
+  /** The grammar engine's parse budget; shows whether this parse met it. */
+  budgetMs?: number;
+  source?: GrammarSource | null;
+}
+
+export function TextReconstruction({ grammar, roundTripMs = null, budgetMs, source = null }: TextReconstructionProps) {
   if (!grammar) {
     return <p className="text-mist">Reconstructed sentences appear here as you speak.</p>;
   }
@@ -50,9 +67,18 @@ export function TextReconstruction({ grammar }: { grammar: GrammarResponse | nul
           <p className="rounded-xl border border-neon-cyan/30 bg-neon-cyan/[0.06] px-4 py-3 font-display text-2xl font-semibold leading-snug text-ink sm:text-3xl">
             {grammar.formattedText}
           </p>
-          <p className="flex items-center gap-1.5 text-sm text-mist">
-            <Timer aria-hidden className="size-4" />
-            Parsed in <span className="tabular-nums">{grammar.executionLatencyMs.toFixed(1)} ms</span>
+          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-mist">
+            <span className="flex items-center gap-1.5">
+              <Timer aria-hidden className="size-4" />
+              Parsed in <span className="tabular-nums">{grammar.executionLatencyMs.toFixed(1)} ms</span>
+            </span>
+            {budgetMs !== undefined && source !== 'simulated' && (
+              <span data-ast-budget className={grammar.executionLatencyMs <= budgetMs ? 'text-neon-cyan' : 'text-warn'}>
+                {grammar.executionLatencyMs <= budgetMs ? `within the ${budgetMs} ms budget` : `over the ${budgetMs} ms budget`}
+              </span>
+            )}
+            {roundTripMs !== null && <span className="tabular-nums">{roundTripMs.toFixed(1)} ms round trip</span>}
+            {source && <span>{SOURCE_LABELS[source]}</span>}
           </p>
         </div>
       </motion.div>

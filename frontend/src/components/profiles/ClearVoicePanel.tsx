@@ -113,12 +113,12 @@ export function DirectPasteControls() {
 }
 
 export function ClearVoicePanel() {
-  const { grammar } = useSession();
+  const { grammar, grammarSource, grammarRoundTripMs, astBudgetMs } = useSession();
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
       <section aria-label="Sentence reconstruction" className="glass flex flex-col gap-5 rounded-2xl p-5">
         <TokenInput />
-        <TextReconstruction grammar={grammar} />
+        <TextReconstruction grammar={grammar} source={grammarSource} roundTripMs={grammarRoundTripMs} budgetMs={astBudgetMs} />
       </section>
       <div className="flex flex-col gap-4">
         <section aria-label="Direct paste" className="glass rounded-2xl p-5">

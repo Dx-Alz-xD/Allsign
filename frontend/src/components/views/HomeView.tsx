@@ -42,6 +42,9 @@ function LivePitchDashboard() {
       source={session.isSimulated ? session.demoTelemetry : session.telemetry}
       peer={session.peer}
       grammar={session.grammar}
+      grammarSource={session.grammarSource}
+      grammarRoundTripMs={session.grammarRoundTripMs}
+      astBudgetMs={session.astBudgetMs}
       isSimulated={session.isSimulated}
     />
   );

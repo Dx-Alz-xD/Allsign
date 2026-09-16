@@ -43,6 +43,14 @@ export class ApiError extends Error {
   }
 }
 
+/** GET /health/live: cheap liveness check, no parse. */
+export interface LiveHealthResponse {
+  status: 'ok';
+  uptimeSeconds: number;
+  startedAt: string;
+}
+
+/** GET /health: also times a probe parse against the grammar engine's budget. */
 export interface HealthResponse {
   status: 'ok' | 'degraded';
   uptimeSeconds: number;
@@ -86,7 +94,8 @@ const query = (params: Record<string, string | number | undefined>): string => {
 };
 
 export const api = {
-  health: () => request<HealthResponse>('/health/live', {}, 3000),
+  health: () => request<LiveHealthResponse>('/health/live', {}, 3000),
+  healthReport: () => request<HealthResponse>('/health', {}, 3000),
 
   grammar: {
     translate: (body: GrammarRequest) => request<GrammarResponse>('/api/grammar/translate', { method: 'POST', ...json(body) }),

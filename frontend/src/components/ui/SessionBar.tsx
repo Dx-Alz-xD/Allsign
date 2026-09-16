@@ -3,14 +3,17 @@
 import { Activity, Mic, MicOff, Server, Square, TriangleAlert } from 'lucide-react';
 import { buttonStyles } from '@/components/modals/Modal';
 import { useSession } from '@/components/providers/SessionProvider';
+import { useTelemetrySnapshot } from '@/hooks/useTelemetrySnapshot';
 import { cn } from '@/lib/cn';
 
 /** Microphone start/stop, engine state, backend reachability and the latest warning. */
 export function SessionBar({ className }: { className?: string }) {
-  const { engine, live, startMicrophone, stopMicrophone, backendOnline, warning, pipeline } = useSession();
+  const { engine, live, startMicrophone, stopMicrophone, backendOnline, warning, telemetry } = useSession();
+  // Sampled a few times a second: reading the pipeline ref during render would freeze at the last re-render.
+  const { frame } = useTelemetrySnapshot(telemetry, 4);
   const starting = engine.state === 'starting';
   const running = engine.state === 'running';
-  const processingMs = live ? pipeline.snapshotRef.current.processingMs : 0;
+  const processingMs = live ? frame.latencyMs : 0;
 
   return (
     <section aria-label="Live session" className={cn('glass flex flex-wrap items-center gap-3 rounded-2xl px-4 py-3', className)}>

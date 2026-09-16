@@ -16,6 +16,7 @@
 
 import type { CaregiverMessage, CaregiverRole, SignalMessage } from '@shared/types';
 import type { PeerLinkState, PeerStatus } from '@/lib/hud/types';
+import { parseCaregiverMessage } from '@/lib/peer/messages';
 import { Outbox, type Delivery, type OutboxChannel } from '@/lib/peer/outbox';
 
 export type LinkStatus = 'idle' | 'signalling' | 'waiting' | 'connecting' | 'connected' | 'error' | 'closed';
@@ -107,7 +108,8 @@ export class CaregiverLink {
 
   private openSocket(): void {
     const { signalUrl, room, role } = this.options;
-    this.update({ status: 'signalling', error: null });
+    // Reconnecting the relay while the data channel is open must not report the link as down.
+    this.update(this.connected ? { error: null } : { status: 'signalling', error: null });
     let socket: WebSocket;
     try {
       socket = new WebSocket(
@@ -260,20 +262,22 @@ export class CaregiverLink {
       if (!this.closedByUser) this.update({ status: 'waiting', roundTripMs: null });
     };
     channel.onmessage = (event) => {
-      let message: WireMessage;
+      let raw: unknown;
       try {
-        message = JSON.parse(String(event.data)) as WireMessage;
+        raw = JSON.parse(String(event.data));
       } catch {
         return;
       }
-      if (message.type === 'ping') {
-        this.sendWire({ type: 'pong', at: message.at });
+      const wire = raw as { type?: unknown; at?: unknown };
+      if (wire?.type === 'ping' || wire?.type === 'pong') {
+        if (typeof wire.at !== 'number' || !Number.isFinite(wire.at)) return;
+        if (wire.type === 'ping') this.sendWire({ type: 'pong', at: wire.at });
+        else this.update({ roundTripMs: Math.max(0, Math.round(performance.now() - wire.at)) });
         return;
       }
-      if (message.type === 'pong') {
-        this.update({ roundTripMs: Math.max(0, Math.round(performance.now() - message.at)) });
-        return;
-      }
+      // The peer is another app instance: drop anything malformed before it reaches the HUD.
+      const message = parseCaregiverMessage(raw);
+      if (!message) return;
       this.update({ received: this.state.received + 1 });
       this.options.onMessage(message);
     };

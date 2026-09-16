@@ -5,6 +5,8 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { FlaskConical, Send } from 'lucide-react';
 import type { GrammarResponse } from '@shared/types';
 import { HUDCanvas, type HudLayer } from '@/components/HUDCanvas';
+import type { GrammarSource } from '@/components/providers/SessionProvider';
+import { SignOverlay, SignStrip, useSignPlayback } from '@/components/signs/SignSequence';
 import { TelemetryBar } from '@/components/TelemetryBar';
 import { SyntaxTree, TextReconstruction } from '@/components/ui/Reconstruction';
 import { useTelemetrySnapshot } from '@/hooks/useTelemetrySnapshot';
@@ -20,12 +22,26 @@ interface PitchModeDashboardProps {
   source: TelemetrySource;
   peer: PeerLinkState;
   grammar: GrammarResponse | null;
+  grammarSource?: GrammarSource | null;
+  /** speech.worker request start to parsed response, for `grammar`. */
+  grammarRoundTripMs?: number | null;
+  /** The grammar engine's parse budget. */
+  astBudgetMs?: number;
   /** Shows a notice that the data comes from the built-in simulated signal. */
   isSimulated?: boolean;
 }
 
-export function PitchModeDashboard({ source, peer, grammar, isSimulated = false }: PitchModeDashboardProps) {
+export function PitchModeDashboard({
+  source,
+  peer,
+  grammar,
+  grammarSource = null,
+  grammarRoundTripMs = null,
+  astBudgetMs = 10,
+  isSimulated = false,
+}: PitchModeDashboardProps) {
   const { frame, blocks, blockCount } = useTelemetrySnapshot(source, 8);
+  const signs = useSignPlayback(grammar?.formattedText ?? null, frame.fluency.wpm);
 
   return (
     <div className="space-y-4">
@@ -36,16 +52,24 @@ export function PitchModeDashboard({ source, peer, grammar, isSimulated = false 
         </p>
       )}
 
-      <TelemetryBar source={source} peer={peer} parseLatencyMs={grammar?.executionLatencyMs ?? null} />
+      <TelemetryBar
+        source={source}
+        peer={peer}
+        parseLatencyMs={grammarSource === 'simulated' ? null : (grammar?.executionLatencyMs ?? null)}
+        parseTargetMs={astBudgetMs}
+      />
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)_minmax(0,1fr)]">
         <Column title="Audio spectrogram and DSP">
-          <HUDCanvas
-            source={source}
-            layers={SPECTROGRAM_LAYERS}
-            label="Scrolling spectrogram of the last few seconds of audio, low frequencies at the bottom"
-            canvasClassName="h-44"
-          />
+          <div className="relative">
+            <HUDCanvas
+              source={source}
+              layers={SPECTROGRAM_LAYERS}
+              label="Scrolling spectrogram of the last few seconds of audio, low frequencies at the bottom"
+              canvasClassName="h-52"
+            />
+            <SignOverlay playback={signs} className="absolute right-2 top-2" />
+          </div>
           <HUDCanvas
             source={source}
             layers={SIGNAL_LAYERS}
@@ -56,7 +80,13 @@ export function PitchModeDashboard({ source, peer, grammar, isSimulated = false 
         </Column>
 
         <Column title="Live text reconstruction">
-          <TextReconstruction grammar={grammar} />
+          <TextReconstruction
+            grammar={grammar}
+            roundTripMs={grammarRoundTripMs}
+            budgetMs={astBudgetMs}
+            source={grammarSource}
+          />
+          <SignStrip playback={signs} />
           <div className="flex flex-col gap-3">
             <h3 className="text-base font-semibold text-ink">Breathing guide</h3>
             <HUDCanvas

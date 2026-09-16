@@ -6,6 +6,7 @@
  */
 
 import type { CaregiverAlert, CaregiverMessage } from '@shared/types';
+import type { Delivery } from '@/lib/peer/outbox';
 import type { TriggerMatch } from '@/workers/trigger.worker';
 
 export type ActionOutcome =
@@ -13,8 +14,8 @@ export type ActionOutcome =
   | { ok: false; action: TriggerMatch['targetAction']; detail: string };
 
 export interface ActionContext {
-  /** Sends over the caregiver data channel; false when no caregiver is connected. */
-  sendToCaregiver: (message: CaregiverMessage) => boolean;
+  /** Queues for the caregiver data channel in order; null when no caregiver link is set up. */
+  broadcastToCaregiver: (message: CaregiverMessage) => Delivery | null;
 }
 
 let alertCounter = 0;
@@ -59,10 +60,12 @@ export async function performTriggerAction(match: TriggerMatch, context: ActionC
     }
     case 'WEBRTC_ALERT': {
       const alert = makeAlert('trigger', match.mappedPhrase);
-      const sent = context.sendToCaregiver({ type: 'alert', alert });
-      return sent
-        ? { ok: true, action, detail: `Alert sent to the caregiver: "${match.mappedPhrase}".` }
-        : { ok: false, action, detail: 'No caregiver device is connected, so the alert was not sent.' };
+      const delivery = context.broadcastToCaregiver({ type: 'alert', alert });
+      if (delivery === 'sent') return { ok: true, action, detail: `Alert sent to the caregiver: "${match.mappedPhrase}".` };
+      if (delivery === 'queued') {
+        return { ok: true, action, detail: `Alert queued for the caregiver until the connection opens: "${match.mappedPhrase}".` };
+      }
+      return { ok: false, action, detail: 'No caregiver link is set up, so the alert was not sent.' };
     }
     case 'OS_HOTKEY': {
       const bridge = typeof window !== 'undefined' ? window.omnivoice : undefined;

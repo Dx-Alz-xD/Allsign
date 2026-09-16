@@ -25,7 +25,19 @@ const ALERT_LABELS = { 'vocal-block': 'Vocal block', fatigue: 'Vocal strain', em
 
 /** Pair two devices through a room code: the speaker shares telemetry, the caregiver watches. */
 export function CaregiverView() {
-  const { link, connectCaregiver, disconnectCaregiver, alerts, remoteTelemetry, peer, telemetry, sendEmergency, backendOnline } = useSession();
+  const {
+    link,
+    connectCaregiver,
+    disconnectCaregiver,
+    alerts,
+    remoteTelemetry,
+    remoteTranscripts,
+    peer,
+    telemetry,
+    sendEmergency,
+    backendOnline,
+  } = useSession();
+  const latestTranscript = remoteTranscripts[0] ?? null;
   const [room, setRoom] = useState(() => generateRoomCode());
   const [role, setRole] = useState<CaregiverRole>('speaker');
   const ids = { room: useId(), role: useId() };
@@ -86,6 +98,7 @@ export function CaregiverView() {
           <Radio aria-hidden className={cn('size-4', link?.status === 'connected' ? 'text-neon-cyan' : '')} />
           {link ? STATUS_TEXT[link.status] : 'Not connected'}
           {link?.roundTripMs !== null && link?.roundTripMs !== undefined && ` · ${link.roundTripMs} ms round trip`}
+          {link && link.queued > 0 && ` · ${link.queued} waiting to send`}
           {link?.error && <span className="text-warn"> · {link.error}</span>}
         </p>
       </section>
@@ -103,9 +116,38 @@ export function CaregiverView() {
       {role === 'caregiver' && (
         <section aria-label="Speaker telemetry" className="space-y-4">
           {link?.status === 'connected' ? (
-            <PitchModeDashboard source={remoteTelemetry} peer={peer} grammar={null} />
+            <PitchModeDashboard
+              source={remoteTelemetry}
+              peer={peer}
+              grammar={latestTranscript?.grammar ?? null}
+              grammarSource={latestTranscript?.source ?? null}
+              grammarRoundTripMs={latestTranscript?.roundTripMs ?? null}
+            />
           ) : (
             <p className="glass rounded-2xl px-5 py-6 text-mist">The speaker&apos;s telemetry appears here once both devices are in the room.</p>
+          )}
+        </section>
+      )}
+
+      {role === 'caregiver' && (
+        <section aria-labelledby="transcripts-heading" className="glass rounded-2xl p-5">
+          <h2 id="transcripts-heading" className="text-xl font-semibold text-ink">
+            Sentences from the speaker
+          </h2>
+          {remoteTranscripts.length === 0 ? (
+            <p className="mt-2 text-mist">Rebuilt sentences arrive here as the speaker talks or types.</p>
+          ) : (
+            <ol aria-live="polite" className="mt-3 flex flex-col gap-2">
+              {remoteTranscripts.map((transcript) => (
+                <li key={transcript.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-1 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                  <span className="min-w-0 flex-1 font-display text-lg text-ink">{transcript.grammar.formattedText}</span>
+                  <span className="shrink-0 text-sm tabular-nums text-mist">
+                    {transcript.source === 'demo' ? 'Demo, ' : ''}
+                    {new Date(transcript.timestamp).toLocaleTimeString()}
+                  </span>
+                </li>
+              ))}
+            </ol>
           )}
         </section>
       )}

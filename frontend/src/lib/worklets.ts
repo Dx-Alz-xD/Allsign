@@ -2,8 +2,8 @@
  * Main-thread glue for the AudioWorklets served from public/worklets/.
  *
  * URLs resolve against `document.baseURI`, so the same paths work on the
- * Next.js dev server (`/worklets/...`) and inside a packaged Electron build
- * loading the static export over `file://`.
+ * Next.js dev server (`/worklets/...`) and inside the Electron build, which
+ * serves the static export over `app://omnivoice/`.
  */
 
 export const CAPTURE_WORKLET_PATH = 'worklets/captureProcessor.js';

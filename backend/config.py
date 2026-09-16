@@ -16,10 +16,10 @@ class Settings(BaseSettings):
     KAGGLE_USERNAME: str = ""
     KAGGLE_KEY: SecretStr = SecretStr("")
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
-    # Desktop shells, matched in full: Electron's app:// scheme, any loopback port, and file:// pages.
-    # Chromium sends "Origin: null" for file:// pages, and sandboxed iframes on any website send the same
-    # value, so drop "|null" here once the packaged app loads its UI over app:// or http.
-    CORS_ORIGIN_REGEX: str = r"app://[^/\s]*|http://127\.0\.0\.1(:\d{1,5})?|file://.*|null"
+    # Desktop shells, matched in full: Electron's app:// scheme and any loopback port. The packaged app loads
+    # its UI over app://omnivoice, so "Origin: null" (file:// pages, but also sandboxed iframes on any website)
+    # is not allowed: with credentials on, it would let any site call this API.
+    CORS_ORIGIN_REGEX: str = r"app://[^/\s]*|http://127\.0\.0\.1(:\d{1,5})?"
 
 
 @lru_cache

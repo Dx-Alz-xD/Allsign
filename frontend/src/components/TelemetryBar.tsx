@@ -18,10 +18,12 @@ interface TelemetryBarProps {
   peer: PeerLinkState;
   /** GrammarResponse.executionLatencyMs from the most recent parse. */
   parseLatencyMs?: number | null;
+  /** The grammar engine's parse budget (backend LATENCY_BUDGET_MS). */
+  parseTargetMs?: number;
   className?: string;
 }
 
-export function TelemetryBar({ source, peer, parseLatencyMs = null, className }: TelemetryBarProps) {
+export function TelemetryBar({ source, peer, parseLatencyMs = null, parseTargetMs = LATENCY_TARGET_MS, className }: TelemetryBarProps) {
   const { frame, blockCount } = useTelemetrySnapshot(source);
   const { fluency, telemetry } = frame;
 
@@ -41,8 +43,8 @@ export function TelemetryBar({ source, peer, parseLatencyMs = null, className }:
       </Cell>
       <Cell title="Latency">
         <div className="flex flex-col gap-3">
-          <LatencyCounter label="Audio processing" ms={frame.latencyMs} />
-          <LatencyCounter label="Grammar parsing" ms={parseLatencyMs} />
+          <LatencyCounter label="Audio processing" ms={frame.latencyMs} targetMs={LATENCY_TARGET_MS} />
+          <LatencyCounter label="Grammar parsing" ms={parseLatencyMs} targetMs={parseTargetMs} />
         </div>
       </Cell>
       <Cell title="Volume">
@@ -134,9 +136,9 @@ function BlockIndicator({ active, durationMs, count }: { active: boolean; durati
   );
 }
 
-function LatencyCounter({ label, ms }: { label: string; ms: number | null }) {
+function LatencyCounter({ label, ms, targetMs }: { label: string; ms: number | null; targetMs: number }) {
   const known = ms !== null && ms > 0;
-  const over = known && ms > LATENCY_TARGET_MS;
+  const over = known && ms > targetMs;
 
   return (
     <div>
@@ -153,7 +155,7 @@ function LatencyCounter({ label, ms }: { label: string; ms: number | null }) {
             ) : (
               <CircleCheck aria-hidden className="size-4 text-neon-cyan" />
             ))}
-          {known && <span className="sr-only">{over ? 'over the 15 ms target' : 'within the 15 ms target'}</span>}
+          {known && <span className="sr-only">{over ? `over the ${targetMs} ms target` : `within the ${targetMs} ms target`}</span>}
         </span>
       </div>
       <div aria-hidden className="relative mt-1.5 h-1.5 rounded-full bg-white/10">
@@ -163,7 +165,7 @@ function LatencyCounter({ label, ms }: { label: string; ms: number | null }) {
         />
         <div
           className="absolute -top-1 h-3.5 w-0.5 rounded-full bg-ink/70"
-          style={{ left: `${(LATENCY_TARGET_MS / LATENCY_SCALE_MS) * 100}%` }}
+          style={{ left: `${(Math.min(targetMs, LATENCY_SCALE_MS) / LATENCY_SCALE_MS) * 100}%` }}
         />
       </div>
     </div>

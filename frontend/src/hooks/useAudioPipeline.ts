@@ -422,8 +422,6 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
       const channel = new MessageChannel();
       const connectAudio: AudioWorkerRequest = { type: 'connect', port: channel.port1 };
       audioWorker.postMessage(connectAudio, [channel.port1]);
-      const connectBiomarker: BiomarkerRequest = { type: 'connect', port: channel.port2 };
-      biomarkerWorker.postMessage(connectBiomarker, [channel.port2]);
 
       biomarkerWorker.onmessage = (event: MessageEvent<BiomarkerResponse>) => {
         const message = event.data;
@@ -454,6 +452,9 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
 
       const request: BiomarkerRequest = { type: 'init', config: biomarkerConfig };
       biomarkerWorker.postMessage(request);
+      // init goes first: formant and trigger workers reject a port that arrives before it.
+      const connectBiomarker: BiomarkerRequest = { type: 'connect', port: channel.port2 };
+      biomarkerWorker.postMessage(connectBiomarker, [channel.port2]);
     }
 
     if (formantWorker) {
@@ -462,8 +463,6 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
       const channel = new MessageChannel();
       const connectAudio: AudioWorkerRequest = { type: 'connect', port: channel.port1 };
       audioWorker.postMessage(connectAudio, [channel.port1]);
-      const connectFormant: FormantWorkerRequest = { type: 'connect', port: channel.port2 };
-      formantWorker.postMessage(connectFormant, [channel.port2]);
 
       formantWorker.onmessage = (event: MessageEvent<FormantWorkerResponse>) => {
         const message = event.data;
@@ -490,6 +489,8 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
 
       const request: FormantWorkerRequest = { type: 'init', config: formantConfig };
       formantWorker.postMessage(request);
+      const connectFormant: FormantWorkerRequest = { type: 'connect', port: channel.port2 };
+      formantWorker.postMessage(connectFormant, [channel.port2]);
     }
 
     if (triggerWorker) {
@@ -497,8 +498,6 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
       const channel = new MessageChannel();
       const connectAudio: AudioWorkerRequest = { type: 'connectSpectral', port: channel.port1 };
       audioWorker.postMessage(connectAudio, [channel.port1]);
-      const connectTrigger: TriggerWorkerRequest = { type: 'connect', port: channel.port2 };
-      triggerWorker.postMessage(connectTrigger, [channel.port2]);
 
       triggerWorker.onmessage = (event: MessageEvent<TriggerWorkerResponse>) => {
         const message = event.data;
@@ -535,14 +534,14 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
 
       const request: TriggerWorkerRequest = { type: 'init', config: triggerConfig };
       triggerWorker.postMessage(request);
+      const connectTrigger: TriggerWorkerRequest = { type: 'connect', port: channel.port2 };
+      triggerWorker.postMessage(connectTrigger, [channel.port2]);
     }
 
     if (cadenceWorker) {
       const channel = new MessageChannel();
       const connectAudio: AudioWorkerRequest = { type: 'connect', port: channel.port1 };
       audioWorker.postMessage(connectAudio, [channel.port1]);
-      const connectCadence: CadenceRequest = { type: 'connect', port: channel.port2 };
-      cadenceWorker.postMessage(connectCadence, [channel.port2]);
 
       cadenceWorker.onmessage = (event: MessageEvent<CadenceResponse>) => {
         const message = event.data;
@@ -571,6 +570,8 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
 
       const request: CadenceRequest = { type: 'init', config: cadenceConfig };
       cadenceWorker.postMessage(request);
+      const connectCadence: CadenceRequest = { type: 'connect', port: channel.port2 };
+      cadenceWorker.postMessage(connectCadence, [channel.port2]);
     }
 
     return () => {

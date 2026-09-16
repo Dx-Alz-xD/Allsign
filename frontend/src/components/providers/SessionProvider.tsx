@@ -8,6 +8,13 @@
  * Nothing starts until `startMicrophone()` is called from a user gesture.
  * Until then the telemetry store holds silent frames; Pitch Demo mode can
  * fall back to the built-in simulated signal.
+ *
+ * Speech path: every token source (typed text, system dictation, the Pitch
+ * Mode demo script) feeds speech.worker, which segments utterances and calls
+ * the grammar engine (POST /api/grammar/translate) strictly in order. Each
+ * translation then goes, in that same order, to the direct paste queue
+ * (nut.js through the desktop bridge) and to the caregiver data channel's
+ * broadcast queue.
  */
 
 import {
@@ -24,28 +31,40 @@ import type {
   CaregiverAlert,
   CaregiverMessage,
   CaregiverRole,
+  CaregiverTranscript,
   GrammarResponse,
   ProfileMode,
   SessionAnalytics,
+  SpeechSource,
 } from '@shared/types';
 import { useSettings } from '@/components/providers/SettingsProvider';
 import { useAudioPipeline, type AudioPipeline } from '@/hooks/useAudioPipeline';
 import { makeAlert, performTriggerAction, typeIntoActiveApp, type ActionOutcome } from '@/lib/actions';
 import { api, backendUrl, backendWebSocketUrl } from '@/lib/api/client';
 import { getAudioEngine, type EngineSnapshot, type FluencySettings } from '@/lib/audio/engine';
-import { startSimulatedAudio, simulatedGrammarAt, simulatedPeerAt } from '@/lib/hud/simulated';
+import { DEMO_TOKEN_SCRIPT, startSimulatedAudio, simulatedGrammarAt, simulatedPeerAt } from '@/lib/hud/simulated';
 import { createTelemetryStore } from '@/lib/hud/store';
 import type { PeerLinkState, TelemetrySource } from '@/lib/hud/types';
+import { createPasteQueue } from '@/lib/output/pasteQueue';
 import { CaregiverLink, toPeerLinkState, type CaregiverLinkState } from '@/lib/peer/caregiverLink';
+import type { Delivery } from '@/lib/peer/outbox';
 import { iceServersFrom } from '@/lib/settings/network';
 import { SystemDictationSource, systemDictationAvailable, type TokenSourceKind } from '@/lib/speech/tokenSource';
+import type { SpeechWorkerRequest, SpeechWorkerResponse } from '@/workers/speech.worker';
 import type { TriggerMatch } from '@/workers/trigger.worker';
 
 const TELEMETRY_HZ = 30;
 const CAREGIVER_TELEMETRY_EVERY_TICKS = 8; // ~4 Hz
 const HEALTH_POLL_MS = 30_000;
 const MAX_ALERTS = 30;
+const MAX_TRANSCRIPTS = 30;
 const MIN_SESSION_SECONDS = 5;
+/** backend grammar_engine.LATENCY_BUDGET_MS, until the health check reports it. */
+const DEFAULT_AST_BUDGET_MS = 10;
+/** Pitch Mode replays one demo sentence through the real grammar engine this often. */
+const DEMO_SENTENCE_INTERVAL_MS = 8000;
+
+export type GrammarSource = SpeechSource | 'simulated';
 
 export interface SessionContextValue {
   profile: ProfileMode;
@@ -67,6 +86,12 @@ export interface SessionContextValue {
   setFeedbackEnabled: (enabled: boolean) => void;
 
   grammar: GrammarResponse | null;
+  /** Where the shown sentence came from; 'simulated' is canned output while the grammar server is offline. */
+  grammarSource: GrammarSource | null;
+  /** speech.worker request start to parsed response, for the shown sentence. */
+  grammarRoundTripMs: number | null;
+  /** The grammar engine's parse budget (GET /health/live). */
+  astBudgetMs: number;
   grammarError: string | null;
   grammarBusy: boolean;
   interimTokens: string[];
@@ -89,6 +114,8 @@ export interface SessionContextValue {
   alerts: CaregiverAlert[];
   /** Frames received from the speaker while this device is the caregiver. */
   remoteTelemetry: TelemetrySource;
+  /** Sentences received from the speaker, newest first. */
+  remoteTranscripts: CaregiverTranscript[];
   sendEmergency: () => void;
 
   lastMatch: TriggerMatch | null;
@@ -131,22 +158,30 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
   const [feedbackEnabled, setFeedbackEnabledState] = useState(false);
 
   const [grammar, setGrammar] = useState<GrammarResponse | null>(null);
+  const [grammarSource, setGrammarSource] = useState<SpeechSource | null>(null);
+  const [grammarRoundTripMs, setGrammarRoundTripMs] = useState<number | null>(null);
+  const [astBudgetMs, setAstBudgetMs] = useState(DEFAULT_AST_BUDGET_MS);
   const [grammarError, setGrammarError] = useState<string | null>(null);
   const [grammarBusy, setGrammarBusy] = useState(false);
   const [interimTokens, setInterimTokens] = useState<string[]>([]);
   const [tokenSourceKind, setTokenSourceKind] = useState<TokenSourceKind>('manual');
   const [dictationActive, setDictationActiveState] = useState(false);
 
-  const [directPasteActive, setDirectPasteActive] = useState(false);
+  const [directPasteActive, setDirectPasteActiveState] = useState(false);
   const [lastPasteDetail, setLastPasteDetail] = useState<string | null>(null);
 
   const [link, setLink] = useState<CaregiverLinkState | null>(null);
   const [alerts, setAlerts] = useState<CaregiverAlert[]>([]);
+  const [remoteTranscripts, setRemoteTranscripts] = useState<CaregiverTranscript[]>([]);
   const [lastMatch, setLastMatch] = useState<TriggerMatch | null>(null);
   const [lastAction, setLastAction] = useState<ActionOutcome | null>(null);
 
   const linkRef = useRef<CaregiverLink | null>(null);
   const dictationRef = useRef<SystemDictationSource | null>(null);
+  const speechWorkerRef = useRef<Worker | null>(null);
+  /** submitTokens promises, by the requestId echoed on the utterance. */
+  const pendingSubmissionsRef = useRef(new Map<string, (response: GrammarResponse | null) => void>());
+  const requestCounterRef = useRef(0);
   const directPasteRef = useRef(directPasteActive);
   directPasteRef.current = directPasteActive;
   const profileRef = useRef(profile);
@@ -156,7 +191,10 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
     setAlerts((current) => [alert, ...current].slice(0, MAX_ALERTS));
   }, []);
 
+  /** Best effort, for live telemetry only. */
   const sendToCaregiver = useCallback((message: CaregiverMessage): boolean => linkRef.current?.send(message) ?? false, []);
+  /** Alerts and sentences: in order, queued until the data channel opens. Null when no link is set up. */
+  const broadcastToCaregiver = useCallback((message: CaregiverMessage): Delivery | null => linkRef.current?.broadcast(message) ?? null, []);
 
   // --- workers -------------------------------------------------------------
 
@@ -170,12 +208,12 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
   const onTriggerMatch = useCallback(
     (match: TriggerMatch) => {
       setLastMatch(match);
-      void performTriggerAction(match, { sendToCaregiver }).then((outcome) => {
+      void performTriggerAction(match, { broadcastToCaregiver }).then((outcome) => {
         setLastAction(outcome);
         if (outcome.action === 'WEBRTC_ALERT' && outcome.ok) pushAlert(makeAlert('trigger', match.mappedPhrase));
       });
     },
-    [pushAlert, sendToCaregiver],
+    [broadcastToCaregiver, pushAlert],
   );
 
   const pipeline = useAudioPipeline({
@@ -250,27 +288,36 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
 
   // --- telemetry feed ------------------------------------------------------
 
+  const postSpeech = useCallback((request: SpeechWorkerRequest) => speechWorkerRef.current?.postMessage(request), []);
+
   useEffect(() => {
     let ticks = 0;
     let blocked = false;
     let fatigued = false;
+    let voiceActive = false;
     const timer = window.setInterval(() => {
       const frame = getHudFrame();
       telemetry.push(frame);
       ticks += 1;
 
       const snapshot = pipeline.snapshotRef.current;
+      // While cadence.worker hears an utterance, speech.worker holds its idle flush so a block does not split a sentence.
+      if (snapshot.cadence.utteranceActive !== voiceActive) {
+        voiceActive = snapshot.cadence.utteranceActive;
+        postSpeech({ type: 'voice', active: voiceActive });
+      }
+
       if (snapshot.cadence.vocalBlockDetected && !blocked) {
         const alert = makeAlert('vocal-block', 'Vocal block detected', snapshot.cadence.blockDurationMs);
         pushAlert(alert);
-        sendToCaregiver({ type: 'alert', alert });
+        broadcastToCaregiver({ type: 'alert', alert });
       }
       blocked = snapshot.cadence.vocalBlockDetected;
 
       if (snapshot.fatigueWarning && !fatigued) {
         const alert = makeAlert('fatigue', `Vocal strain is high (${Math.round(snapshot.strainSmoothed)} of 100)`);
         pushAlert(alert);
-        sendToCaregiver({ type: 'alert', alert });
+        broadcastToCaregiver({ type: 'alert', alert });
       }
       fatigued = snapshot.fatigueWarning;
 
@@ -279,7 +326,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       }
     }, 1000 / TELEMETRY_HZ);
     return () => window.clearInterval(timer);
-  }, [getHudFrame, pipeline.snapshotRef, pushAlert, sendToCaregiver, telemetry]);
+  }, [broadcastToCaregiver, getHudFrame, pipeline.snapshotRef, postSpeech, pushAlert, sendToCaregiver, telemetry]);
 
   // Pitch Demo keeps the simulated signal while no microphone runs.
   const isSimulated = profile === 'pitch_demo' && !live;
@@ -305,32 +352,155 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
     };
   }, []);
 
-  // --- grammar -------------------------------------------------------------
+  // --- speech -> grammar -> paste + caregiver --------------------------------
 
-  const typeText = useCallback(async (text: string) => {
-    const result = await typeIntoActiveApp(text);
-    setLastPasteDetail(result.detail);
+  const pasteQueue = useMemo(
+    () =>
+      createPasteQueue({
+        type: (text) => typeIntoActiveApp(text),
+        onOutcome: (outcome) => setLastPasteDetail(outcome.detail),
+      }),
+    [],
+  );
+
+  const setDirectPasteActive = useCallback(
+    (active: boolean) => {
+      setDirectPasteActiveState(active);
+      // The person has probably moved to a new text field, so the next sentence starts without a space.
+      if (active) pasteQueue.restart();
+    },
+    [pasteQueue],
+  );
+
+  const typeText = useCallback(
+    async (text: string) => {
+      pasteQueue.enqueue(text);
+      await pasteQueue.idle();
+    },
+    [pasteQueue],
+  );
+
+  const settleSubmission = useCallback((requestId: string | null, response: GrammarResponse | null) => {
+    if (!requestId) return;
+    const resolve = pendingSubmissionsRef.current.get(requestId);
+    pendingSubmissionsRef.current.delete(requestId);
+    resolve?.(response);
   }, []);
 
-  const submitTokens = useCallback(
-    async (tokens: string[]): Promise<GrammarResponse | null> => {
-      if (tokens.length === 0) return null;
-      setGrammarBusy(true);
-      setGrammarError(null);
-      try {
-        const response = await api.grammar.translate({ rawSpeechTokens: tokens, sourceLang: 'en', targetProfile: profileRef.current });
-        setGrammar(response);
-        setInterimTokens([]);
-        if (directPasteRef.current && response.formattedText) await typeText(response.formattedText);
-        return response;
-      } catch (error) {
-        setGrammarError(error instanceof Error ? error.message : String(error));
-        return null;
-      } finally {
-        setGrammarBusy(false);
+  const handleSpeechMessage = useCallback(
+    (message: SpeechWorkerResponse) => {
+      switch (message.type) {
+        case 'ready':
+          return;
+        case 'interim':
+          setInterimTokens(message.tokens);
+          return;
+        case 'utterance':
+          setGrammarBusy(true);
+          return;
+        case 'translation': {
+          const { grammar: response, utterance, roundTripMs } = message.translation;
+          setGrammarBusy(message.pending > 0);
+          setGrammar(response);
+          setGrammarSource(utterance.source);
+          setGrammarRoundTripMs(roundTripMs);
+          setGrammarError(null);
+          setInterimTokens([]);
+
+          // Demo sentences are for the screen, never typed into someone's apps.
+          if (utterance.source !== 'demo' && directPasteRef.current && response.formattedText) {
+            pasteQueue.enqueue(response.formattedText);
+          }
+          const transcript: CaregiverTranscript = {
+            id: `${utterance.openedAt}-${utterance.id}-${utterance.part}`,
+            source: utterance.source,
+            grammar: response,
+            roundTripMs,
+            timestamp: Date.now(),
+          };
+          broadcastToCaregiver({ type: 'transcript', transcript });
+
+          if (utterance.part === utterance.parts) settleSubmission(utterance.requestId, response);
+          return;
+        }
+        case 'translationFailed':
+          setGrammarBusy(message.pending > 0);
+          setGrammarError(
+            message.retryInMs === null
+              ? message.message
+              : `${message.message} Trying again in ${Math.max(1, Math.round(message.retryInMs / 1000))} s.`,
+          );
+          if (message.retryInMs === null) settleSubmission(message.utterance.requestId, null);
+          return;
+        case 'dropped':
+          setGrammarBusy(message.pending > 0);
+          setGrammarError(message.message);
+          settleSubmission(message.utterance.requestId, null);
+          return;
+        case 'error':
+          setGrammarError(message.message);
+          return;
       }
     },
-    [typeText],
+    [broadcastToCaregiver, pasteQueue, settleSubmission],
+  );
+
+  const speechHandlerRef = useRef(handleSpeechMessage);
+  speechHandlerRef.current = handleSpeechMessage;
+
+  useEffect(() => {
+    const worker = new Worker(new URL('../../workers/speech.worker.ts', import.meta.url));
+    speechWorkerRef.current = worker;
+    worker.onmessage = (event: MessageEvent<SpeechWorkerResponse>) => speechHandlerRef.current(event.data);
+    worker.onerror = (event) => setGrammarError(`The speech worker stopped: ${event.message || 'unknown error'}`);
+    worker.postMessage({
+      type: 'init',
+      config: { apiBaseUrl: backendUrl(), sourceLang: 'en', targetProfile: profileRef.current },
+    } satisfies SpeechWorkerRequest);
+
+    const pending = pendingSubmissionsRef.current;
+    return () => {
+      speechWorkerRef.current = null;
+      worker.postMessage({ type: 'close' } satisfies SpeechWorkerRequest);
+      worker.terminate();
+      for (const resolve of pending.values()) resolve(null);
+      pending.clear();
+    };
+  }, []);
+
+  useEffect(() => {
+    postSpeech({ type: 'configure', config: { targetProfile: profile } });
+  }, [postSpeech, profile]);
+
+  // A dictated sentence waiting for the grammar server is retried as soon as the server answers again,
+  // and the engine's parse budget is read once per reconnection.
+  useEffect(() => {
+    if (!backendOnline) return;
+    postSpeech({ type: 'online' });
+    let cancelled = false;
+    api
+      .healthReport()
+      .then((report) => {
+        if (!cancelled && Number.isFinite(report.astEngine.budgetMs)) setAstBudgetMs(report.astEngine.budgetMs);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [backendOnline, postSpeech]);
+
+  const submitTokens = useCallback(
+    (tokens: string[]): Promise<GrammarResponse | null> => {
+      if (tokens.length === 0 || !speechWorkerRef.current) return Promise.resolve(null);
+      requestCounterRef.current += 1;
+      const requestId = `submit-${requestCounterRef.current}`;
+      setGrammarError(null);
+      return new Promise((resolve) => {
+        pendingSubmissionsRef.current.set(requestId, resolve);
+        postSpeech({ type: 'tokens', tokens, final: true, source: 'manual', endOfUtterance: true, requestId });
+      });
+    },
+    [postSpeech],
   );
 
   const setDictationActive = useCallback(
@@ -340,13 +510,12 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
         dictationRef.current = null;
         setDictationActiveState(false);
         setInterimTokens([]);
+        // Whatever was dictated so far is still a sentence.
+        postSpeech({ type: 'flush' });
         return;
       }
       const source = new SystemDictationSource(
-        (batch) => {
-          if (batch.final) void submitTokens(batch.tokens);
-          else setInterimTokens(batch.tokens);
-        },
+        (batch) => postSpeech({ type: 'tokens', tokens: batch.tokens, final: batch.final, source: 'system-dictation' }),
         (message) => {
           setGrammarError(message);
           setDictationActiveState(false);
@@ -357,7 +526,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       source.start();
       setDictationActiveState(source.active);
     },
-    [submitTokens],
+    [postSpeech],
   );
 
   useEffect(() => () => dictationRef.current?.stop(), []);
@@ -368,6 +537,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
     linkRef.current?.close();
     linkRef.current = null;
     setLink(null);
+    setRemoteTranscripts([]);
   }, []);
 
   const connectCaregiver = useCallback(
@@ -380,21 +550,31 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
         iceServers: iceServersFrom(settings.network),
         onState: setLink,
         onMessage: (message) => {
-          if (message.type === 'alert') {
-            pushAlert(message.alert);
-            return;
+          switch (message.type) {
+            case 'alert':
+              pushAlert(message.alert);
+              return;
+            case 'transcript':
+              setRemoteTranscripts((current) =>
+                [message.transcript, ...current.filter((item) => item.id !== message.transcript.id)].slice(0, MAX_TRANSCRIPTS),
+              );
+              return;
+            case 'telemetry': {
+              const current = remoteTelemetry.getFrame();
+              remoteTelemetry.push({
+                telemetry: message.telemetry,
+                fluency: message.fluency,
+                waveform: current.waveform,
+                spectrumMaxHz: current.spectrumMaxHz,
+                latencyMs: message.latencyMs,
+              });
+              return;
+            }
           }
-          const current = remoteTelemetry.getFrame();
-          remoteTelemetry.push({
-            telemetry: message.telemetry,
-            fluency: message.fluency,
-            waveform: current.waveform,
-            spectrumMaxHz: current.spectrumMaxHz,
-            latencyMs: message.latencyMs,
-          });
         },
       });
       linkRef.current = next;
+      setRemoteTranscripts([]);
       next.connect();
     },
     [pushAlert, remoteTelemetry, settings.network],
@@ -405,15 +585,33 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
   const sendEmergency = useCallback(() => {
     const alert = makeAlert('emergency', 'Emergency alert raised from the speaker device');
     pushAlert(alert);
-    sendToCaregiver({ type: 'alert', alert });
-  }, [pushAlert, sendToCaregiver]);
+    broadcastToCaregiver({ type: 'alert', alert });
+  }, [broadcastToCaregiver, pushAlert]);
 
   const peer = useMemo<PeerLinkState>(() => {
     if (link) return toPeerLinkState(link);
     return isSimulated ? simulatedPeerAt(2) : toPeerLinkState(null);
   }, [isSimulated, link]);
 
-  const shownGrammar = grammar ?? (isSimulated ? simulatedGrammarAt(0) : null);
+  // Pitch Mode without a microphone replays demo sentences through speech.worker and the real grammar engine,
+  // so the AST output and its latency on screen are genuine.
+  useEffect(() => {
+    if (!isSimulated || backendOnline !== true) return;
+    let index = 0;
+    const next = () => {
+      const tokens = DEMO_TOKEN_SCRIPT[index % DEMO_TOKEN_SCRIPT.length];
+      index += 1;
+      postSpeech({ type: 'tokens', tokens: [...tokens], final: true, source: 'demo', endOfUtterance: true });
+    };
+    next();
+    const timer = window.setInterval(next, DEMO_SENTENCE_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [backendOnline, isSimulated, postSpeech]);
+
+  // Canned output only while the grammar server is unreachable, and labelled as such.
+  const useCannedGrammar = grammar === null && isSimulated && backendOnline === false;
+  const shownGrammar = grammar ?? (useCannedGrammar ? simulatedGrammarAt(0) : null);
+  const shownGrammarSource: GrammarSource | null = useCannedGrammar ? 'simulated' : grammarSource;
 
   const value = useMemo<SessionContextValue>(
     () => ({
@@ -431,6 +629,9 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       setFeedback,
       setFeedbackEnabled,
       grammar: shownGrammar,
+      grammarSource: shownGrammarSource,
+      grammarRoundTripMs: useCannedGrammar ? null : grammarRoundTripMs,
+      astBudgetMs,
       grammarError,
       grammarBusy,
       interimTokens,
@@ -450,6 +651,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       disconnectCaregiver,
       alerts,
       remoteTelemetry,
+      remoteTranscripts,
       sendEmergency,
       lastMatch,
       lastAction,
@@ -472,6 +674,10 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       setFeedback,
       setFeedbackEnabled,
       shownGrammar,
+      shownGrammarSource,
+      useCannedGrammar,
+      grammarRoundTripMs,
+      astBudgetMs,
       grammarError,
       grammarBusy,
       interimTokens,
@@ -480,6 +686,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       dictationActive,
       setDictationActive,
       directPasteActive,
+      setDirectPasteActive,
       lastPasteDetail,
       typeText,
       link,
@@ -488,6 +695,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       disconnectCaregiver,
       alerts,
       remoteTelemetry,
+      remoteTranscripts,
       sendEmergency,
       lastMatch,
       lastAction,

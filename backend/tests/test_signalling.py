@@ -120,13 +120,14 @@ def test_bad_rooms_and_roles_are_closed_with_4400(client: "TestClient", path: st
     assert closed.value.code == signalling.CLOSE_BAD_REQUEST
 
 
-@pytest.mark.parametrize("origin", ["http://localhost:3000", "app://omnivoice", "http://127.0.0.1:5173", "null"])
+@pytest.mark.parametrize("origin", ["http://localhost:3000", "app://omnivoice", "http://127.0.0.1:5173"])
 def test_app_origins_may_connect(client: "TestClient", origin: str) -> None:
     with client.websocket_connect(url(), headers={"origin": origin}) as speaker:
         assert speaker.receive_json()["type"] == "joined"
 
 
-@pytest.mark.parametrize("origin", ["https://evil.example", "http://localhost:3000.evil.example"])
+# "null" is what file:// pages and sandboxed iframes on any website send.
+@pytest.mark.parametrize("origin", ["https://evil.example", "http://localhost:3000.evil.example", "null"])
 def test_other_origins_are_refused_at_the_handshake(client: "TestClient", origin: str) -> None:
     with pytest.raises(WebSocketDisconnect) as refused:
         with client.websocket_connect(url(), headers={"origin": origin}):

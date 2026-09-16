@@ -26,8 +26,6 @@ def preflight(client: "TestClient", origin: str):
         "http://127.0.0.1",
         "http://127.0.0.1:3000",
         "http://127.0.0.1:5173",
-        "file://",
-        "null",
     ],
 )
 def test_local_app_origins_are_allowed(client: "TestClient", origin: str) -> None:
@@ -48,6 +46,9 @@ def test_local_app_origins_are_allowed(client: "TestClient", origin: str) -> Non
         "http://127.0.0.2:3000",
         "https://127.0.0.1:3000",
         "app://omnivoice/../evil",
+        # Sent by file:// pages and by sandboxed iframes on any website.
+        "null",
+        "file://",
     ],
 )
 def test_other_origins_are_rejected(client: "TestClient", origin: str) -> None:

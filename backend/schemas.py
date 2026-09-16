@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from typing import Annotated, Dict, List, Literal, Optional, Union
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, EmailStr, Field, StringConstraints, model_validator
 
 FINGERPRINT_BINS = 128
 MAX_SPEECH_TOKENS = 256
@@ -219,3 +219,57 @@ class SignalPeerLeft(BaseModel):
 class SignalError(BaseModel):
     type: Literal["error"] = "error"
     message: str
+
+# Voicematics website accounts and desktop licences (routers/auth.py). Mirror the Auth* and License* types in
+# shared/types.ts.
+PlanTier = Literal["free", "pro", "lifetime"]
+LicenseStatus = Literal["active", "inactive", "invalid", "hardware_mismatch"]
+MIN_PASSWORD_CHARS = 8
+MAX_PASSWORD_CHARS = 256
+
+class SignupRequest(BaseModel):
+    email: EmailStr
+    password: Annotated[str, StringConstraints(min_length=MIN_PASSWORD_CHARS, max_length=MAX_PASSWORD_CHARS)]
+
+class LoginRequest(BaseModel):
+    email: EmailStr
+    password: Annotated[str, StringConstraints(min_length=1, max_length=MAX_PASSWORD_CHARS)]
+
+class WebUserOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    email: str
+    planTier: PlanTier
+    isActive: bool
+    createdAt: UtcDatetime
+
+class LicenseInfo(BaseModel):
+    key: str
+    tier: PlanTier
+    status: LicenseStatus
+    hardwareBound: bool
+    activatedAt: Optional[UtcDatetime] = None
+
+class AccountResponse(BaseModel):
+    user: WebUserOut
+    license: Optional[LicenseInfo] = None
+
+class AuthSessionResponse(AccountResponse):
+    token: str
+    tokenType: Literal["bearer"] = "bearer"
+    expiresAt: UtcDatetime
+
+class LicenseVerifyRequest(BaseModel):
+    email: EmailStr
+    licenseKey: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
+    # A stable id of the desktop machine. The first verification binds the key to it.
+    hardwareId: Optional[Annotated[str, StringConstraints(strip_whitespace=True, min_length=8, max_length=256)]] = None
+
+class LicenseVerifyResponse(BaseModel):
+    valid: bool
+    status: LicenseStatus
+    tier: Optional[PlanTier] = None
+    hardwareBound: bool = False
+    activatedAt: Optional[UtcDatetime] = None
+    checkedAt: UtcDatetime

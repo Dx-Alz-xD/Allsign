@@ -144,7 +144,10 @@ def timing_cells(timing: Timing) -> str:
 class GrammarResult:
     rows: list[dict]
     runs: int
+    # Full chart parse on every call (the gated figure).
     timing: Timing
+    # The same calls answered from the word-class forest cache, as repeated sentence shapes are in the server.
+    cached_timing: Timing
 
     @property
     def passed(self) -> int:
@@ -160,19 +163,26 @@ class GrammarResult:
 
 
 def run_grammar(runs: int, freeze_gc: bool) -> GrammarResult:
+    grammar_engine.clear_parse_cache()
     for _ in range(WARMUP_CALLS):
         for case in CASES:
+            grammar_engine.translate(case.tokens, use_cache=False)
             grammar_engine.translate(case.tokens)
     settle_gc(freeze_gc)
 
     outputs: list[set[str]] = [set() for _ in CASES]
     latencies: list[list[float]] = [[] for _ in CASES]
+    cached: list[float] = []
     # Cases are interleaved across runs so machine noise spreads evenly instead of hitting one case.
     for _ in range(runs):
         for index, case in enumerate(CASES):
-            result = grammar_engine.translate(case.tokens)
+            result = grammar_engine.translate(case.tokens, use_cache=False)
             outputs[index].add(result.formatted_text)
             latencies[index].append(result.latency_ms)
+            hit = grammar_engine.translate(case.tokens)
+            # A cache hit must give exactly what the full parse gave.
+            outputs[index].add(hit.formatted_text)
+            cached.append(hit.latency_ms)
 
     rows = []
     for case, seen, samples in zip(CASES, outputs, latencies):
@@ -185,7 +195,9 @@ def run_grammar(runs: int, freeze_gc: bool) -> GrammarResult:
             "median_ms": statistics.median(samples),
             "max_ms": max(samples),
         })
-    return GrammarResult(rows, runs, Timing.of(sample for samples in latencies for sample in samples))
+    return GrammarResult(
+        rows, runs, Timing.of(sample for samples in latencies for sample in samples), Timing.of(cached)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -963,7 +975,8 @@ def render_report(evaluation: Evaluation) -> str:
         "repetitions, contractions, pronoun case, agreement, do-support, zero copula, questions and fragments. "
         f"Each case ran {grammar.runs} times, interleaved ({grammar_timing.samples:,} timed calls). Latency is the full "
         "engine call as returned in `executionLatencyMs`: normalization, lexing, CFG chart parsing, parse "
-        "ranking, canonical AST rebuild and rendering.",
+        "ranking, canonical AST rebuild and rendering. These figures bypass the parse cache, so every call runs "
+        "the chart parser.",
         "",
         "| Metric | Value |",
         "|---|---|",
@@ -973,6 +986,14 @@ def render_report(evaluation: Evaluation) -> str:
         f"| p50 / p95 / p99 / max | {fmt_ms(grammar_timing.p50_ms)} / {fmt_ms(grammar_timing.p95_ms)} / "
         f"{fmt_ms(grammar_timing.p99_ms)} / {fmt_ms(grammar_timing.max_ms)} ms |",
         f"| Slowest case (median) | {fmt_ms(grammar.slowest['median_ms'])} ms, {fmt_tokens(grammar.slowest['case'].tokens)} |",
+        f"| Repeated word-class pattern, p50 / p95 / max | {fmt_ms(grammar.cached_timing.p50_ms)} / "
+        f"{fmt_ms(grammar.cached_timing.p95_ms)} / {fmt_ms(grammar.cached_timing.max_ms)} ms |",
+        "",
+        "The server keeps the candidate trees of the last "
+        f"{grammar_engine.PARSE_CACHE_SIZE} word-class sequences, because the chart depends only on the sequence "
+        "(\"I want water\" and \"I want tea\" share one). A repeated shape skips the chart parser but is still "
+        "ranked on its own words; the last row times that path, and every cached answer above matched the full "
+        "parse. Common shapes, including Pitch Mode's demo sentences, are parsed into the cache at startup.",
         "",
     ]
     gaps = [row for row in grammar.rows if row["case"].known_gap]

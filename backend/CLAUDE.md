@@ -63,12 +63,13 @@ npm test                  # vitest DSP suite (workers and worklets)
 cd backend
 python -m venv venv                                   # Python 3.11+
 venv/Scripts/python.exe -m pip install -r requirements-dev.txt
-venv/Scripts/python.exe -m uvicorn main:app --reload --port 8000   # API + docs at localhost:8000/docs
+venv/Scripts/python.exe -m uvicorn main:app --reload --port 8000   # API + docs at 127.0.0.1:8000/docs
 venv/Scripts/python.exe -m pytest                     # full suite on an in-memory SQLite DB
 venv/Scripts/python.exe scripts/kaggle_sync.py        # fetch CMUdict + word frequencies, seed the phoneme trie
 venv/Scripts/python.exe scripts/evaluate_benchmarks.py  # regenerate EVALUATION_REPORT.md
 ```
-- Run the API as a single worker: trigger profiles and signalling rooms are held in process memory.
+- Run the API as a single worker: trigger profiles, signalling rooms and the login throttle are held in process memory.
+- Voicematics accounts live in `data/web_users.db` (`web_auth/`), separate from `omnivoice.db`; never log passwords, hashes, tokens or licence keys.
 - `kaggle_sync.py` needs `KAGGLE_USERNAME` / `KAGGLE_KEY` in `backend/.env`; `--skip-download` re-seeds from `data/raw`.
 
 ---
@@ -84,7 +85,10 @@ venv/Scripts/python.exe scripts/evaluate_benchmarks.py  # regenerate EVALUATION_
 | `GET/POST /api/sessions`, `GET /api/sessions/summary`, `GET/DELETE /api/sessions/{id}` | `SessionAnalyticsInput` -> `SessionAnalytics`, `SessionSummary` | AnalyticsView, SessionProvider |
 | `GET/POST /api/phonemes/targets`, `DELETE /api/phonemes/targets/{id}` | `PhonemeTargetInput` -> `PhonemeTarget` | TherapyPanel |
 | `GET /api/phonemes/lookup?prefix=W+AO&limit=10` | -> `PhonemeLookupResponse` | AphasiaPanel |
-| `WS /ws/signal/{room}?role=speaker\|caregiver` | `SignalMessage` (close 4409 = role taken) | caregiverLink.ts |
+| `WS /ws/signal/{room}?role=speaker\|caregiver&client=<id>` | `SignalMessage` (close 4409 = role taken, 4410 = replaced by the same device) | caregiverLink.ts |
+| `POST /api/auth/signup`, `POST /api/auth/login` | `AuthCredentials` -> `AuthSessionResponse` | Voicematics website |
+| `GET /api/auth/me` (Bearer token) | -> `AccountResponse` | Voicematics website |
+| `POST /api/license/verify` | `LicenseVerifyRequest` -> `LicenseVerifyResponse` | desktop app startup (client ready, not wired) |
 
 - Change a contract in both files in the same commit; the frontend client is `frontend/src/lib/api/client.ts`.
 - `frontend/src/workers/trigger.worker.ts` ports `acoustic_matcher.py`; `tests/test_acoustic_matcher.py` and `src/workers/__tests__/dsp.test.ts` pin the same reference values.

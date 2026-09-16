@@ -69,6 +69,9 @@ Downloads use [`kagglehub`](https://github.com/Kaggle/kagglehub) with each devel
 | SQLAlchemy | MIT | SQLite ORM |
 | Uvicorn | BSD-3-Clause | ASGI server |
 | kagglehub | Apache-2.0 | Dataset downloads |
+| argon2-cffi | MIT | Argon2id password hashing for Voicematics accounts |
+| PyJWT | MIT | Session tokens for Voicematics accounts |
+| email-validator (with dnspython, ISC) | Unlicense | Email address validation for Voicematics signups |
 | pytest (development) | MIT | Test suite |
 | httpx2 (development) | BSD-3-Clause | HTTP client used by FastAPI's test client |
 

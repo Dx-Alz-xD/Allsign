@@ -23,6 +23,12 @@ const STATUS_TEXT = {
 
 const ALERT_LABELS = { 'vocal-block': 'Vocal block', fatigue: 'Vocal strain', emergency: 'Emergency', trigger: 'Trigger' } as const;
 
+const EMERGENCY_NOTES = {
+  sent: 'Emergency alert sent.',
+  queued: 'Emergency alert queued; it goes out as soon as the caregiver connects.',
+  none: 'Connect to a room first: without a caregiver link the alert cannot be sent.',
+} as const;
+
 /** Pair two devices through a room code: the speaker shares telemetry, the caregiver watches. */
 export function CaregiverView() {
   const {
@@ -40,6 +46,7 @@ export function CaregiverView() {
   const latestTranscript = remoteTranscripts[0] ?? null;
   const [room, setRoom] = useState(() => generateRoomCode());
   const [role, setRole] = useState<CaregiverRole>('speaker');
+  const [emergencyNote, setEmergencyNote] = useState('');
   const ids = { room: useId(), role: useId() };
   const active = link !== null && link.status !== 'closed';
 
@@ -106,10 +113,15 @@ export function CaregiverView() {
       {role === 'speaker' && (
         <section aria-label="Sharing" className="space-y-4">
           <TelemetryBar source={telemetry} peer={peer} />
-          <button type="button" onClick={sendEmergency} className={buttonStyles.danger}>
-            <Siren aria-hidden className="size-4" />
-            Send emergency alert now
-          </button>
+          <div className="flex flex-wrap items-center gap-3">
+            <button type="button" onClick={() => setEmergencyNote(EMERGENCY_NOTES[sendEmergency() ?? 'none'])} className={buttonStyles.danger}>
+              <Siren aria-hidden className="size-4" />
+              Send emergency alert now
+            </button>
+            <p aria-live="polite" className="text-sm text-mist">
+              {emergencyNote}
+            </p>
+          </div>
         </section>
       )}
 

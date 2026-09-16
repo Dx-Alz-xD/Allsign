@@ -166,31 +166,44 @@ export function startSimulatedAudio(store: TelemetryStore): () => void {
   return () => window.clearInterval(timer);
 }
 
+// Exactly what backend/grammar_engine.py returns for these tokens (latencies measured on a laptop), so the
+// offline fallback shows the same sentences and tree format as the live demo.
 const SIMULATED_GRAMMAR: readonly GrammarResponse[] = [
   {
-    originalTokens: ['I', 'I', 'w-want', 'to', 'go', 'store'],
+    originalTokens: ['um', 'me', 'w-w-water', 'want'],
+    formattedText: 'I want water.',
+    parsedTree: '(ROOT (S (NP (PRON I)) (VP (V want) (NP (N water)))))',
+    executionLatencyMs: 1.2,
+  },
+  {
+    originalTokens: ['I', 'I', 'w-want', 'to', 'go', 'to', 'the', 'store'],
     formattedText: 'I want to go to the store.',
-    parsedTree:
-      '(S (NP (PRP I)) (VP (VBP want) (S (VP (TO to) (VP (VB go) (PP (TO to) (NP (DT the) (NN store))))))))',
-    executionLatencyMs: 3.4,
+    parsedTree: '(ROOT (S (NP (PRON I)) (VP (V want) (VP (TO to) (V go) (PP (P to) (NP (DET the) (N store)))))))',
+    executionLatencyMs: 1.8,
   },
   {
     originalTokens: ['can', 'can', 'you', 'c-call', 'my', 'mom'],
     formattedText: 'Can you call my mom?',
-    parsedTree: '(SQ (MD Can) (NP (PRP you)) (VP (VB call) (NP (PRP$ my) (NN mom))))',
-    executionLatencyMs: 2.9,
+    parsedTree: '(ROOT (SQ (AUX can) (NP (PRON you)) (VP (V call) (NP (DET my) (N mom)))))',
+    executionLatencyMs: 1.4,
   },
   {
-    originalTokens: ['water', 'um', 'cold', 'water', 'please'],
-    formattedText: 'Cold water, please.',
-    parsedTree: '(FRAG (NP (JJ Cold) (NN water)) (INTJ (UH please)))',
-    executionLatencyMs: 2.2,
+    originalTokens: ['where', 'my', 'shoes', 'are'],
+    formattedText: 'Where are my shoes?',
+    parsedTree: '(ROOT (SBARQ (WH where) (SQ (COP are) (NP (DET my) (N shoes)))))',
+    executionLatencyMs: 1.0,
   },
   {
-    originalTokens: ['the', 'the', 'b-bus', 'is', 'late'],
-    formattedText: 'The bus is late.',
-    parsedTree: '(S (NP (DT The) (NN bus)) (VP (VBZ is) (ADJP (JJ late))))',
-    executionLatencyMs: 3.1,
+    originalTokens: ['cold', 'water', 'please', 'I', 'want'],
+    formattedText: 'I want cold water please.',
+    parsedTree: '(ROOT (S (NP (PRON I)) (VP (V want) (NP (ADJ cold) (N water))) (ADVP (ADV please))))',
+    executionLatencyMs: 2.6,
+  },
+  {
+    originalTokens: ['i', 'i', 'need', 'uh', 'my', 'm-m-medicine'],
+    formattedText: 'I need my medicine.',
+    parsedTree: '(ROOT (S (NP (PRON I)) (VP (V need) (NP (DET my) (N medicine)))))',
+    executionLatencyMs: 1.1,
   },
 ];
 

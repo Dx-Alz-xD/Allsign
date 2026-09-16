@@ -13,6 +13,11 @@ export interface HudFrame {
   spectrumMaxHz: number;
   /** End-to-end DSP processing latency for this frame. */
   latencyMs: number;
+  /**
+   * cadence.worker's block count, which drops again when an ongoing "block" turns out to be the end of the
+   * utterance. Sources without it (simulated, remote) count every block that starts.
+   */
+  blockCount?: number;
 }
 
 export interface BlockEvent {

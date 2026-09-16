@@ -4,12 +4,17 @@
  */
 
 import type {
+  AccountResponse,
   AcousticMatchRequest,
   AcousticMatchResponse,
   AcousticTriggerProfile,
   AcousticTriggerUpdate,
+  AuthCredentials,
+  AuthSessionResponse,
   GrammarRequest,
   GrammarResponse,
+  LicenseVerifyRequest,
+  LicenseVerifyResponse,
   PhonemeLookupResponse,
   PhonemeTarget,
   PhonemeTargetInput,
@@ -21,7 +26,9 @@ import type {
   SessionSummary,
 } from '@shared/types';
 
-export const DEFAULT_BACKEND_URL = 'http://localhost:8000';
+// 127.0.0.1 rather than localhost: localhost resolves to ::1 first on Windows, uvicorn listens on IPv4 only by
+// default, and Chromium then waits ~300 ms before falling back on every new connection.
+export const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8000';
 
 export function backendUrl(): string {
   return (process.env.NEXT_PUBLIC_BACKEND_URL || DEFAULT_BACKEND_URL).replace(/\/+$/, '');
@@ -133,6 +140,18 @@ export const api = {
     createTarget: (body: PhonemeTargetInput) => request<PhonemeTarget>('/api/phonemes/targets', { method: 'POST', ...json(body) }),
     removeTarget: (id: string) => request<void>(`/api/phonemes/targets/${encodeURIComponent(id)}`, { method: 'DELETE' }),
     lookup: (prefix: string, limit = 10) => request<PhonemeLookupResponse>(`/api/phonemes/lookup${query({ prefix, limit })}`),
+  },
+
+  // Argon2id is deliberately slow (about 0.15 s per check), so these get a longer timeout.
+  auth: {
+    signup: (body: AuthCredentials) => request<AuthSessionResponse>('/api/auth/signup', { method: 'POST', ...json(body) }, 10_000),
+    login: (body: AuthCredentials) => request<AuthSessionResponse>('/api/auth/login', { method: 'POST', ...json(body) }, 10_000),
+    me: (token: string) => request<AccountResponse>('/api/auth/me', { headers: { authorization: `Bearer ${token}` } }),
+  },
+
+  license: {
+    verify: (body: LicenseVerifyRequest) =>
+      request<LicenseVerifyResponse>('/api/license/verify', { method: 'POST', ...json(body) }),
   },
 };
 

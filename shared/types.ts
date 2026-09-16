@@ -207,8 +207,9 @@ export type CaregiverMessage =
   | { type: 'alert'; alert: CaregiverAlert }
   | { type: 'transcript'; transcript: CaregiverTranscript };
 
-// Signalling relay (WebSocket /ws/signal/{room}?role=speaker|caregiver). The relay forwards offer, answer
-// and ice to the other role and sends the rest itself. Close code 4409: that role is already taken in the room.
+// Signalling relay (WebSocket /ws/signal/{room}?role=speaker|caregiver&client=<id>). The relay forwards offer,
+// answer and ice to the other role and sends the rest itself. Close codes: 4409 the role is taken by another
+// device, 4410 this device reconnected and the newer connection replaced this one.
 export type SignalMessage =
   | { type: 'joined'; room: string; role: CaregiverRole; peerPresent: boolean }
   | { type: 'peer-joined'; role: CaregiverRole }
@@ -217,3 +218,58 @@ export type SignalMessage =
   | { type: 'answer'; sdp: string }
   | { type: 'ice'; candidate: string; sdpMid: string | null; sdpMLineIndex: number | null }
   | { type: 'error'; message: string };
+
+// Voicematics website accounts and desktop licences (backend routers/auth.py, stored in data/web_users.db)
+export type PlanTier = 'free' | 'pro' | 'lifetime';
+export type LicenseStatus = 'active' | 'inactive' | 'invalid' | 'hardware_mismatch';
+
+export interface AuthCredentials {
+  email: string;
+  password: string; // signup: 8 - 256 characters, hashed with Argon2id
+}
+
+export interface WebUser {
+  id: string;
+  email: string; // stored lower-case
+  planTier: PlanTier;
+  isActive: boolean;
+  createdAt: string; // ISO 8601, UTC
+}
+
+export interface LicenseInfo {
+  key: string; // VM-XXXX-YYYY-ZZZZ
+  tier: PlanTier;
+  status: LicenseStatus;
+  hardwareBound: boolean;
+  activatedAt: string | null;
+}
+
+// GET /api/auth/me (Authorization: Bearer <token>)
+export interface AccountResponse {
+  user: WebUser;
+  license: LicenseInfo | null;
+}
+
+// POST /api/auth/signup (201) and POST /api/auth/login
+export interface AuthSessionResponse extends AccountResponse {
+  token: string; // HS256 JWT
+  tokenType: 'bearer';
+  expiresAt: string;
+}
+
+// POST /api/license/verify, called by the desktop app on startup. The first call with a hardwareId binds the key
+// to that machine; unknown emails, unknown keys and other accounts' keys all answer status 'invalid'.
+export interface LicenseVerifyRequest {
+  email: string;
+  licenseKey: string;
+  hardwareId?: string; // 8 - 256 characters; only its SHA-256 is stored
+}
+
+export interface LicenseVerifyResponse {
+  valid: boolean;
+  status: LicenseStatus;
+  tier: PlanTier | null;
+  hardwareBound: boolean;
+  activatedAt: string | null;
+  checkedAt: string;
+}

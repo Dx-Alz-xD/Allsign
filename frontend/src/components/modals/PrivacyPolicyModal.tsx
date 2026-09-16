@@ -16,6 +16,7 @@ import {
 import { Modal, buttonStyles } from '@/components/modals/Modal';
 import { useModals } from '@/components/modals/ModalProvider';
 import { useSettings } from '@/components/providers/SettingsProvider';
+import { backendUrl } from '@/lib/api/client';
 import { serverHost } from '@/lib/settings/network';
 import { SETTINGS_STORAGE_KEY } from '@/lib/settings/schema';
 import { readStoredData } from '@/lib/settings/storage';
@@ -80,36 +81,31 @@ function useDeviceChecks(): DeviceCheck[] {
       },
     ];
 
-    const backend = process.env.NEXT_PUBLIC_BACKEND_URL;
-    let grammar: DeviceCheck = {
-      label: 'Grammar server',
-      value: 'Not set',
-      detail: 'Recognized words are not sent anywhere.',
-      tone: 'local',
-    };
-    if (backend) {
-      try {
-        const url = new URL(backend);
-        grammar = isLoopbackHost(url.hostname)
-          ? { label: 'Grammar server', value: `On this device (${url.host})`, detail: 'Recognized words stay on this computer.', tone: 'local' }
-          : {
-              label: 'Grammar server',
-              value: `Another computer (${url.host})`,
-              detail: `Recognized words travel over your network to that computer${url.protocol === 'https:' ? ', encrypted' : ' without encryption'}. Use a server you control.`,
-              tone: 'leaves-device',
-            };
-      } catch {
-        grammar = { label: 'Grammar server', value: 'Invalid address', detail: 'Recognized words cannot be sent anywhere until this is fixed.', tone: 'info' };
-      }
+    // The same address the app actually calls: NEXT_PUBLIC_BACKEND_URL, or the local default.
+    let grammar: DeviceCheck;
+    try {
+      const url = new URL(backendUrl());
+      grammar = isLoopbackHost(url.hostname)
+        ? { label: 'Grammar server', value: `On this device (${url.host})`, detail: 'Recognized words stay on this computer.', tone: 'local' }
+        : {
+            label: 'Grammar server',
+            value: `Another computer (${url.host})`,
+            detail: `Recognized words travel over your network to that computer${url.protocol === 'https:' ? ', encrypted' : ' without encryption'}. Use a server you control.`,
+            tone: 'leaves-device',
+          };
+    } catch {
+      grammar = { label: 'Grammar server', value: 'Invalid address', detail: 'Recognized words cannot be sent anywhere until this is fixed.', tone: 'info' };
     }
     checks.push(grammar);
 
     checks.push({
       label: 'Caregiver link, when you connect one',
       value: turnUrl ? `Direct, with ${serverHost(turnUrl)} as fallback relay` : 'Direct between devices',
-      detail: turnUrl
-        ? 'Alerts and readings you share go straight to the caregiver, encrypted. If a direct path fails, the relay forwards the encrypted data and can see connection details such as IP addresses.'
-        : 'Alerts and readings you share go straight to the caregiver, encrypted. No relay is configured.',
+      detail: `Alerts, readings, and rebuilt sentences you share go straight to the caregiver, encrypted. The grammar server only introduces the two devices and sees the room code and connection details such as IP addresses.${
+        turnUrl
+          ? ' If a direct path fails, the relay forwards the encrypted data and can also see connection details.'
+          : ' No relay is configured.'
+      }`,
       tone: turnUrl ? 'leaves-device' : 'info',
     });
 
@@ -338,8 +334,9 @@ export function PrivacyPolicyModal({ open, onClose }: { open: boolean; onClose: 
           <ul className="list-disc space-y-2 pl-5">
             <li>Your grammar server runs on another computer. The check above tells you if it does.</li>
             <li>
-              You connect a caregiver. Shared alerts and readings travel encrypted between the two devices, through a
-              relay only if a direct connection fails.
+              You connect a caregiver. Shared alerts, readings, and rebuilt sentences travel encrypted between the two
+              devices, through a relay only if a direct connection fails. The grammar server sets up the connection and
+              sees the room code and IP addresses, never the shared data.
             </li>
             <li>
               You use direct paste. The text becomes part of the app you paste into, such as Slack, Word, Zoom, or

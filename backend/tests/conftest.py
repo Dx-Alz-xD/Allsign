@@ -2,6 +2,9 @@ import os
 
 # Must run before config/database are imported: tests get a private in-memory DB, never omnivoice.db.
 os.environ["DATABASE_URL"] = "sqlite://"
+os.environ["WEB_AUTH_DATABASE_URL"] = "sqlite://"
+# A fixed test key, so no generated key file is written.
+os.environ["AUTH_JWT_SECRET"] = "test-signing-key-" + "0" * 32
 
 import pytest  # noqa: E402
 

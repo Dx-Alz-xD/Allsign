@@ -755,6 +755,7 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
       waveform: snapshot.waveform,
       spectrumMaxHz: (config?.sampleRate ?? 16000) / 2,
       latencyMs: snapshot.processingMs,
+      blockCount: snapshot.cadence.blockCount,
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [getFluencyMetrics, config?.sampleRate]);

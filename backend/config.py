@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     # is not allowed: with credentials on, it would let any site call this API.
     CORS_ORIGIN_REGEX: str = r"app://[^/\s]*|http://127\.0\.0\.1(:\d{1,5})?"
 
+    # Voicematics website accounts and desktop licences, kept apart from the app data in omnivoice.db.
+    WEB_AUTH_DATABASE_URL: str = "sqlite:///./data/web_users.db"
+    # HS256 key for session tokens, at least 32 characters. When empty, a random key is generated once and
+    # stored next to web_users.db, so it never has to live in .env or git.
+    AUTH_JWT_SECRET: SecretStr = SecretStr("")
+    AUTH_TOKEN_TTL_MINUTES: int = 12 * 60
+
 
 @lru_cache
 def get_settings() -> Settings:

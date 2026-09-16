@@ -46,7 +46,7 @@ import { DEMO_TOKEN_SCRIPT, startSimulatedAudio, simulatedGrammarAt, simulatedPe
 import { createTelemetryStore } from '@/lib/hud/store';
 import type { PeerLinkState, TelemetrySource } from '@/lib/hud/types';
 import { createPasteQueue } from '@/lib/output/pasteQueue';
-import { CaregiverLink, toPeerLinkState, type CaregiverLinkState } from '@/lib/peer/caregiverLink';
+import { CaregiverLink, generateClientId, toPeerLinkState, type CaregiverLinkState } from '@/lib/peer/caregiverLink';
 import type { Delivery } from '@/lib/peer/outbox';
 import { iceServersFrom } from '@/lib/settings/network';
 import { SystemDictationSource, systemDictationAvailable, type TokenSourceKind } from '@/lib/speech/tokenSource';
@@ -63,6 +63,20 @@ const MIN_SESSION_SECONDS = 5;
 const DEFAULT_AST_BUDGET_MS = 10;
 /** Pitch Mode replays one demo sentence through the real grammar engine this often. */
 const DEMO_SENTENCE_INTERVAL_MS = 8000;
+const CLIENT_ID_STORAGE_KEY = 'omnivoice:caregiver-client-id';
+
+/** One id per browser tab, kept across reloads, so the relay lets a reloaded tab take its role back. */
+function tabClientId(): string {
+  try {
+    const stored = window.sessionStorage.getItem(CLIENT_ID_STORAGE_KEY);
+    if (stored && /^[A-Za-z0-9_-]{8,64}$/.test(stored)) return stored;
+    const created = generateClientId();
+    window.sessionStorage.setItem(CLIENT_ID_STORAGE_KEY, created);
+    return created;
+  } catch {
+    return generateClientId();
+  }
+}
 
 export type GrammarSource = SpeechSource | 'simulated';
 
@@ -90,7 +104,7 @@ export interface SessionContextValue {
   grammarSource: GrammarSource | null;
   /** speech.worker request start to parsed response, for the shown sentence. */
   grammarRoundTripMs: number | null;
-  /** The grammar engine's parse budget (GET /health/live). */
+  /** The grammar engine's parse budget (GET /health). */
   astBudgetMs: number;
   grammarError: string | null;
   grammarBusy: boolean;
@@ -116,7 +130,8 @@ export interface SessionContextValue {
   remoteTelemetry: TelemetrySource;
   /** Sentences received from the speaker, newest first. */
   remoteTranscripts: CaregiverTranscript[];
-  sendEmergency: () => void;
+  /** Null when no caregiver link is set up; otherwise whether the alert went out now or waits for the connection. */
+  sendEmergency: () => Delivery | null;
 
   lastMatch: TriggerMatch | null;
   lastAction: ActionOutcome | null;
@@ -166,6 +181,9 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
   const [interimTokens, setInterimTokens] = useState<string[]>([]);
   const [tokenSourceKind, setTokenSourceKind] = useState<TokenSourceKind>('manual');
   const [dictationActive, setDictationActiveState] = useState(false);
+  // Only known in the browser; checking during render would make the prerendered HTML disagree with the client.
+  const [dictationAvailable, setDictationAvailable] = useState(false);
+  useEffect(() => setDictationAvailable(systemDictationAvailable()), []);
 
   const [directPasteActive, setDirectPasteActiveState] = useState(false);
   const [lastPasteDetail, setLastPasteDetail] = useState<string | null>(null);
@@ -293,6 +311,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
   useEffect(() => {
     let ticks = 0;
     let blocked = false;
+    let blocksAtStart = 0;
     let fatigued = false;
     let voiceActive = false;
     const timer = window.setInterval(() => {
@@ -307,12 +326,16 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
         postSpeech({ type: 'voice', active: voiceActive });
       }
 
-      if (snapshot.cadence.vocalBlockDetected && !blocked) {
-        const alert = makeAlert('vocal-block', 'Vocal block detected', snapshot.cadence.blockDurationMs);
+      // A block is only reported once speech resumes: a gap that runs into the end of the utterance is a pause,
+      // and cadence.worker takes it back out of blockCount.
+      const { vocalBlockDetected, blockCount, blockDurationMs } = snapshot.cadence;
+      if (vocalBlockDetected && !blocked) blocksAtStart = blockCount;
+      if (!vocalBlockDetected && blocked && blockCount >= blocksAtStart) {
+        const alert = makeAlert('vocal-block', 'Vocal block', blockDurationMs);
         pushAlert(alert);
         broadcastToCaregiver({ type: 'alert', alert });
       }
-      blocked = snapshot.cadence.vocalBlockDetected;
+      blocked = vocalBlockDetected;
 
       if (snapshot.fatigueWarning && !fatigued) {
         const alert = makeAlert('fatigue', `Vocal strain is high (${Math.round(snapshot.strainSmoothed)} of 100)`);
@@ -546,6 +569,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       const next = new CaregiverLink({
         role,
         room,
+        clientId: tabClientId(),
         signalUrl: backendWebSocketUrl(),
         iceServers: iceServersFrom(settings.network),
         onState: setLink,
@@ -582,10 +606,10 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
 
   useEffect(() => () => linkRef.current?.close(), []);
 
-  const sendEmergency = useCallback(() => {
+  const sendEmergency = useCallback((): Delivery | null => {
     const alert = makeAlert('emergency', 'Emergency alert raised from the speaker device');
     pushAlert(alert);
-    broadcastToCaregiver({ type: 'alert', alert });
+    return broadcastToCaregiver({ type: 'alert', alert });
   }, [broadcastToCaregiver, pushAlert]);
 
   const peer = useMemo<PeerLinkState>(() => {
@@ -610,7 +634,14 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
 
   // Canned output only while the grammar server is unreachable, and labelled as such.
   const useCannedGrammar = grammar === null && isSimulated && backendOnline === false;
-  const shownGrammar = grammar ?? (useCannedGrammar ? simulatedGrammarAt(0) : null);
+  const [cannedSeconds, setCannedSeconds] = useState(0);
+  useEffect(() => {
+    if (!useCannedGrammar) return;
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => setCannedSeconds((Date.now() - startedAt) / 1000), DEMO_SENTENCE_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [useCannedGrammar]);
+  const shownGrammar = grammar ?? (useCannedGrammar ? simulatedGrammarAt(cannedSeconds) : null);
   const shownGrammarSource: GrammarSource | null = useCannedGrammar ? 'simulated' : grammarSource;
 
   const value = useMemo<SessionContextValue>(
@@ -638,7 +669,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       submitTokens,
       tokenSourceKind,
       setTokenSourceKind,
-      dictationAvailable: systemDictationAvailable(),
+      dictationAvailable,
       dictationActive,
       setDictationActive,
       directPasteActive,
@@ -683,6 +714,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       interimTokens,
       submitTokens,
       tokenSourceKind,
+      dictationAvailable,
       dictationActive,
       setDictationActive,
       directPasteActive,

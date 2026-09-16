@@ -1,0 +1,206 @@
+"""Voicematics website accounts and desktop licences, stored in data/web_users.db.
+
+- POST /api/auth/signup   create an account with a free licence key, returns a session token
+- POST /api/auth/login    check the password, returns a session token and the licence status
+- GET  /api/auth/me       the signed-in account (Authorization: Bearer <token>)
+- POST /api/license/verify  the desktop app's startup check of email + licence key, bound to one machine
+
+Login answers the same way for an unknown email and a wrong password, and spends the same Argon2 work on
+both. Licence verification answers "invalid" the same way for an unknown email, an unknown key and another
+account's key.
+"""
+
+import hmac
+from typing import Annotated
+
+import jwt
+from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select, update
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from models import utcnow
+from schemas import (
+    AccountResponse,
+    AuthSessionResponse,
+    LicenseInfo,
+    LicenseVerifyRequest,
+    LicenseVerifyResponse,
+    LoginRequest,
+    SignupRequest,
+    WebUserOut,
+)
+from web_auth.database import get_web_db
+from web_auth.licenses import generate_license_key, hardware_fingerprint, normalise_license_key
+from web_auth.models import LicenseKey, WebUser
+from web_auth.passwords import hash_password, needs_rehash, spend_verification, verify_password
+from web_auth.throttle import LoginThrottle
+from web_auth.tokens import decode_token, issue_token
+
+router = APIRouter(prefix="/api/auth", tags=["web-auth"])
+license_router = APIRouter(prefix="/api/license", tags=["web-licenses"])
+
+WebDb = Annotated[Session, Depends(get_web_db)]
+bearer_scheme = HTTPBearer(auto_error=False)
+login_throttle = LoginThrottle()
+
+SIGNUP_KEY_ATTEMPTS = 5
+INVALID_CREDENTIALS = "Invalid email or password."
+
+
+def normalise_email(email: str) -> str:
+    return email.strip().lower()
+
+
+def unauthorized(detail: str) -> HTTPException:
+    return HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=detail, headers={"WWW-Authenticate": "Bearer"})
+
+
+def current_license(db: Session, user: WebUser) -> LicenseKey | None:
+    if user.licenseKey is None:
+        return None
+    return db.scalar(select(LicenseKey).where(LicenseKey.keyString == user.licenseKey, LicenseKey.userId == user.id))
+
+
+def license_info(user: WebUser, key: LicenseKey | None) -> LicenseInfo | None:
+    if key is None:
+        return None
+    return LicenseInfo(
+        key=key.keyString,
+        tier=key.tier,
+        status="active" if user.isActive else "inactive",
+        hardwareBound=key.hardwareIdBound is not None,
+        activatedAt=key.activatedAt,
+    )
+
+
+def session_response(user: WebUser, key: LicenseKey | None) -> AuthSessionResponse:
+    session = issue_token(user.id, user.email, user.planTier)
+    return AuthSessionResponse(
+        token=session.token,
+        expiresAt=session.expires_at,
+        user=WebUserOut.model_validate(user),
+        license=license_info(user, key),
+    )
+
+
+def email_taken(db: Session, email: str) -> bool:
+    return db.scalar(select(WebUser.id).where(WebUser.email == email)) is not None
+
+
+@router.post("/signup", response_model=AuthSessionResponse, status_code=status.HTTP_201_CREATED)
+def signup(payload: SignupRequest, db: WebDb) -> AuthSessionResponse:
+    email = normalise_email(payload.email)
+    conflict = HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account with this email already exists.")
+    if email_taken(db, email):
+        raise conflict
+    password_hash = hash_password(payload.password)
+
+    for _ in range(SIGNUP_KEY_ATTEMPTS):
+        key_string = generate_license_key()
+        user = WebUser(email=email, passwordHash=password_hash, planTier="free", licenseKey=key_string, isActive=True)
+        key = LicenseKey(keyString=key_string, user=user, tier="free")
+        db.add_all([user, key])
+        try:
+            db.commit()
+        except IntegrityError:
+            db.rollback()
+            # Either a concurrent signup took the email, or (at 2^-60 odds) the key already exists.
+            if email_taken(db, email):
+                raise conflict from None
+            continue
+        return session_response(user, key)
+    raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not allocate a license key.")
+
+
+@router.post("/login", response_model=AuthSessionResponse)
+def login(payload: LoginRequest, db: WebDb) -> AuthSessionResponse:
+    email = normalise_email(payload.email)
+    wait = login_throttle.retry_after(email)
+    if wait:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed sign-in attempts. Try again later.",
+            headers={"Retry-After": str(wait)},
+        )
+
+    user = db.scalar(select(WebUser).where(WebUser.email == email))
+    if user is None:
+        spend_verification(payload.password)
+        login_throttle.record_failure(email)
+        raise unauthorized(INVALID_CREDENTIALS)
+    if not verify_password(payload.password, user.passwordHash):
+        login_throttle.record_failure(email)
+        raise unauthorized(INVALID_CREDENTIALS)
+    # Only someone who knows the password learns that the account is disabled.
+    if not user.isActive:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="This account is disabled.")
+
+    login_throttle.reset(email)
+    if needs_rehash(user.passwordHash):
+        user.passwordHash = hash_password(payload.password)
+        db.commit()
+    return session_response(user, current_license(db, user))
+
+
+def signed_in_user(
+    db: WebDb, credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)]
+) -> WebUser:
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise unauthorized("Sign in first.")
+    try:
+        claims = decode_token(credentials.credentials)
+    except jwt.InvalidTokenError:
+        raise unauthorized("Your session is invalid or has expired. Sign in again.") from None
+    user = db.get(WebUser, claims["sub"])
+    if user is None or not user.isActive:
+        raise unauthorized("Your session is invalid or has expired. Sign in again.")
+    return user
+
+
+@router.get("/me", response_model=AccountResponse)
+def me(user: Annotated[WebUser, Depends(signed_in_user)], db: WebDb) -> AccountResponse:
+    return AccountResponse(user=WebUserOut.model_validate(user), license=license_info(user, current_license(db, user)))
+
+
+@license_router.post("/verify", response_model=LicenseVerifyResponse)
+def verify_license(payload: LicenseVerifyRequest, db: WebDb) -> LicenseVerifyResponse:
+    now = utcnow()
+    key_string = normalise_license_key(payload.licenseKey)
+    row = None
+    if key_string is not None:
+        row = db.execute(
+            select(LicenseKey, WebUser)
+            .join(WebUser, LicenseKey.userId == WebUser.id)
+            .where(LicenseKey.keyString == key_string, WebUser.email == normalise_email(payload.email))
+        ).first()
+    if row is None:
+        return LicenseVerifyResponse(valid=False, status="invalid", checkedAt=now)
+
+    key, user = row
+    details = {"tier": key.tier, "checkedAt": now}
+    if not user.isActive or user.licenseKey != key.keyString:
+        return LicenseVerifyResponse(
+            valid=False, status="inactive", hardwareBound=key.hardwareIdBound is not None, activatedAt=key.activatedAt, **details
+        )
+
+    fingerprint = hardware_fingerprint(payload.hardwareId) if payload.hardwareId else ""
+    if key.hardwareIdBound is None and fingerprint:
+        # Conditional, so two machines activating at once cannot both claim the key.
+        db.execute(
+            update(LicenseKey)
+            .where(LicenseKey.id == key.id, LicenseKey.hardwareIdBound.is_(None))
+            .values(hardwareIdBound=fingerprint, activatedAt=now)
+        )
+        db.commit()
+        db.refresh(key)
+    # A bound key only validates on its machine, so leaving the id out does not get around the binding.
+    if key.hardwareIdBound is not None and not hmac.compare_digest(key.hardwareIdBound, fingerprint):
+        return LicenseVerifyResponse(
+            valid=False, status="hardware_mismatch", hardwareBound=True, activatedAt=key.activatedAt, **details
+        )
+
+    return LicenseVerifyResponse(
+        valid=True, status="active", hardwareBound=key.hardwareIdBound is not None, activatedAt=key.activatedAt, **details
+    )

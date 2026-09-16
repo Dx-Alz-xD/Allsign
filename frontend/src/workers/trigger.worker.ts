@@ -46,7 +46,7 @@ export interface TriggerWorkerConfig {
   captureTimeoutMs: number;
   /** Frame period, used to convert the durations above; 10 ms at a 160 hop. */
   frameMs: number;
-  /** Backend origin, e.g. http://localhost:8000. Empty = local IndexedDB store. */
+  /** Backend origin, e.g. http://127.0.0.1:8000. Empty = local IndexedDB store. */
   apiBaseUrl: string;
 }
 

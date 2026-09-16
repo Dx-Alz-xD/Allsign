@@ -32,6 +32,7 @@ export function createSilentFrame(waveformSize = 512, spectrumMaxHz = 8000): Hud
 export function createTelemetryStore(initial: HudFrame = createSilentFrame()): TelemetryStore {
   let frame = initial;
   let blockCount = 0;
+  let nextEventId = 1;
   let blocks: readonly BlockEvent[] = [];
 
   return {
@@ -43,11 +44,13 @@ export function createTelemetryStore(initial: HudFrame = createSilentFrame()): T
       const wasBlocked = frame.fluency.vocalBlockDetected;
       const isBlocked = next.fluency.vocalBlockDetected;
       const [latest, ...rest] = blocks;
+      // A block that ends with the count going down was the end of the utterance, not a block.
+      const withdrawn = next.blockCount !== undefined && next.blockCount < (frame.blockCount ?? 0);
 
       if (isBlocked && !wasBlocked) {
         blockCount += 1;
         const event: BlockEvent = {
-          id: blockCount,
+          id: nextEventId++,
           startedAt: next.telemetry.timestamp,
           durationMs: next.fluency.blockDurationMs,
           ongoing: true,
@@ -56,8 +59,9 @@ export function createTelemetryStore(initial: HudFrame = createSilentFrame()): T
       } else if (latest?.ongoing && isBlocked) {
         blocks = [{ ...latest, durationMs: next.fluency.blockDurationMs }, ...rest];
       } else if (latest?.ongoing && !isBlocked) {
-        blocks = [{ ...latest, ongoing: false }, ...rest];
+        blocks = withdrawn ? rest : [{ ...latest, ongoing: false }, ...rest];
       }
+      if (next.blockCount !== undefined) blockCount = next.blockCount;
 
       frame = next;
     },

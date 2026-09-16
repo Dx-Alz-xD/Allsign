@@ -6,12 +6,29 @@ import { Siren, Volume2 } from 'lucide-react';
 
 export const EMERGENCY_PHRASE = 'I need help now.';
 
+/** What happened to the caregiver alert: sent now, waiting for the connection, or no caregiver link at all. */
+export type EmergencyDelivery = 'sent' | 'queued' | null;
+
+const DELIVERY_TEXT: Record<'sent' | 'queued' | 'none', { text: string; className: string }> = {
+  sent: { text: 'Your connected caregiver was alerted.', className: 'text-neon-cyan' },
+  queued: {
+    text: 'Your caregiver is not connected right now. The alert will be sent as soon as the connection opens.',
+    className: 'text-warn',
+  },
+  none: {
+    text: 'No caregiver was notified. Caregiver alerts start working once the caregiver link is set up.',
+    className: 'text-warn',
+  },
+};
+
 interface EmergencyAlertDialogProps {
   open: boolean;
   onClose: () => void;
+  delivery?: EmergencyDelivery;
 }
 
-export function EmergencyAlertDialog({ open, onClose }: EmergencyAlertDialogProps) {
+export function EmergencyAlertDialog({ open, onClose, delivery = null }: EmergencyAlertDialogProps) {
+  const deliveryText = DELIVERY_TEXT[delivery ?? 'none'];
   const titleId = useId();
   const descriptionId = useId();
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -88,9 +105,7 @@ export function EmergencyAlertDialog({ open, onClose }: EmergencyAlertDialogProp
             </h2>
             <div id={descriptionId} className="mt-6 space-y-2 text-lg leading-relaxed">
               <p className="text-mist">Show this screen to someone nearby{canSpeak ? ' or play it aloud' : ''}.</p>
-              <p className="font-semibold text-warn">
-                No caregiver was notified. Caregiver alerts start working once the caregiver link is set up.
-              </p>
+              <p className={`font-semibold ${deliveryText.className}`}>{deliveryText.text}</p>
             </div>
             <div className="mt-8 flex flex-wrap gap-3">
               {canSpeak && (

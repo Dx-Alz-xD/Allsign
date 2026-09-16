@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { MotionConfig } from 'framer-motion';
 import type { ProfileMode, SystemState } from '@shared/types';
-import { EmergencyAlertDialog } from '@/components/modals/EmergencyAlertDialog';
+import { EmergencyAlertDialog, type EmergencyDelivery } from '@/components/modals/EmergencyAlertDialog';
 import { ModalProvider, useModals } from '@/components/modals/ModalProvider';
 import { SessionProvider, useSession } from '@/components/providers/SessionProvider';
 import { SettingsProvider } from '@/components/providers/SettingsProvider';
@@ -79,6 +79,7 @@ function ShellContent({ profile, onProfileChange, muted, onMutedChange }: ShellC
   }, []);
 
   const [emergencyOpen, setEmergencyOpen] = useState(false);
+  const [emergencyDelivery, setEmergencyDelivery] = useState<EmergencyDelivery>(null);
   const [announcement, setAnnouncement] = useState('');
   const lastRegularProfileRef = useRef<ProfileMode>(DEFAULT_PROFILE);
 
@@ -106,8 +107,8 @@ function ShellContent({ profile, onProfileChange, muted, onMutedChange }: ShellC
     } else if (action === 'emergency-alert') {
       // Settings and policy dialogs sit in the top layer, so close them or the alert would be hidden behind.
       closeModal();
+      setEmergencyDelivery(sendEmergency());
       setEmergencyOpen(true);
-      sendEmergency();
     } else {
       const leaving = profile === 'pitch_demo';
       onProfileChange(leaving ? lastRegularProfileRef.current : 'pitch_demo');
@@ -131,7 +132,7 @@ function ShellContent({ profile, onProfileChange, muted, onMutedChange }: ShellC
         onToggleMute={toggleMute}
         onOpenSettings={() => openModal({ kind: 'settings' })}
       />
-      <EmergencyAlertDialog open={emergencyOpen} onClose={closeEmergency} />
+      <EmergencyAlertDialog open={emergencyOpen} onClose={closeEmergency} delivery={emergencyDelivery} />
 
       <div className="flex">
         <Sidebar active={view} onSelect={selectView} mobileOpen={navOpen} onMobileClose={closeNav} />

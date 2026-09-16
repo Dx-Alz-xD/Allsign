@@ -9,10 +9,12 @@ English (SVO) syntax tree -> linearize to text. No model calls anywhere.
 import logging
 import re
 import sys
+import threading
 import time
+from collections import OrderedDict
 from contextvars import ContextVar
 from dataclasses import dataclass
-from itertools import islice
+from itertools import count, islice
 from typing import NamedTuple
 
 import nltk
@@ -29,6 +31,10 @@ LATENCY_BUDGET_MS = 10.0
 MAX_CHART_EDGES = 400
 MAX_GROUP_TOKENS = 16
 MAX_CANDIDATE_PARSES = 64
+# The chart depends only on the word-class sequence, so its candidate trees are cached per sequence and
+# re-filled with each request's words ("I want water" and "I want tea" share one forest). Ranking still
+# reads the real words, so the output is exactly what an uncached parse gives.
+PARSE_CACHE_SIZE = 512
 UNPARSED_HEADER = "X-Grammar-Unparsed-Groups"
 
 log = logging.getLogger("grammar_engine")
@@ -582,25 +588,91 @@ def _rank(tree: Tree) -> tuple[int, int, int, int] | None:
     return fragments, -strength, penalty, clauses
 
 
-def _parse(tokens: list[Token], edge_budget: int) -> tuple[Tree | None, int]:
-    """Best-ranked parse and the chart edges it cost. Going over budget costs the whole budget."""
+@dataclass(frozen=True, slots=True)
+class _Forest:
+    """Candidate trees of one word-class sequence, with leaves replaced by token positions."""
+
+    templates: tuple[Tree, ...]
+    edges: int
+
+
+class _ForestCache:
+    def __init__(self, size: int) -> None:
+        self.size = size
+        self._forests: OrderedDict[tuple[str, ...], _Forest] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key: tuple[str, ...]) -> _Forest | None:
+        with self._lock:
+            forest = self._forests.get(key)
+            if forest is not None:
+                self._forests.move_to_end(key)
+            return forest
+
+    def put(self, key: tuple[str, ...], forest: _Forest) -> None:
+        with self._lock:
+            self._forests[key] = forest
+            self._forests.move_to_end(key)
+            while len(self._forests) > self.size:
+                self._forests.popitem(last=False)
+
+    def clear(self) -> None:
+        with self._lock:
+            self._forests.clear()
+
+    def __len__(self) -> int:
+        return len(self._forests)
+
+
+_forests = _ForestCache(PARSE_CACHE_SIZE)
+
+
+def clear_parse_cache() -> None:
+    _forests.clear()
+
+
+def _template(tree: Tree, positions: "count[int]") -> Tree:
+    # A complete parse covers every token once, in order, so the n-th leaf is token n.
+    return Tree(tree.label(), [_template(kid, positions) if isinstance(kid, Tree) else next(positions) for kid in tree])
+
+
+def _instantiate(template: Tree, tokens: list[Token]) -> Tree:
+    return Tree(template.label(), [_instantiate(kid, tokens) if isinstance(kid, Tree) else tokens[kid] for kid in template])
+
+
+def _parse(tokens: list[Token], edge_budget: int, use_cache: bool = True) -> tuple[Tree | None, int]:
+    """Best-ranked parse and the chart edges it cost. Going over budget costs the whole budget.
+
+    A cached forest keeps the edge count its chart needed, so the budget decides exactly as a fresh parse would.
+    """
     if not tokens or edge_budget <= 0:
         return None, 0
-    reset = _edge_budget.set(edge_budget)
-    try:
-        chart = PARSER.chart_parse(tokens)
-        # NLTK materializes the whole forest and raises ValueError past its own tree budget.
-        candidates = list(islice(chart.parses(GRAMMAR.start()), MAX_CANDIDATE_PARSES))
-    except (_ChartBudgetExceeded, ValueError):
-        return None, edge_budget
-    finally:
-        _edge_budget.reset(reset)
+    key = tuple(token.tag for token in tokens)
+    forest = _forests.get(key) if use_cache else None
+    if forest is not None:
+        if forest.edges > edge_budget:
+            return None, edge_budget
+        candidates = [_instantiate(template, tokens) for template in forest.templates]
+        edges = forest.edges
+    else:
+        reset = _edge_budget.set(edge_budget)
+        try:
+            chart = PARSER.chart_parse(tokens)
+            # NLTK materializes the whole forest and raises ValueError past its own tree budget.
+            candidates = list(islice(chart.parses(GRAMMAR.start()), MAX_CANDIDATE_PARSES))
+        except (_ChartBudgetExceeded, ValueError):
+            return None, edge_budget
+        finally:
+            _edge_budget.reset(reset)
+        edges = chart.num_edges()
+        if use_cache:
+            _forests.put(key, _Forest(tuple(_template(candidate, count()) for candidate in candidates), edges))
     best, best_key = None, None
     for candidate in candidates:
-        key = _rank(candidate)
-        if key is not None and (best_key is None or key < best_key):
-            best, best_key = candidate, key
-    return best, chart.num_edges()
+        rank = _rank(candidate)
+        if rank is not None and (best_key is None or rank < best_key):
+            best, best_key = candidate, rank
+    return best, edges
 
 
 # ---------------------------------------------------------------------------
@@ -940,15 +1012,15 @@ def _clause_groups(tokens: list[Token]) -> list[tuple[Token | None, list[Token]]
     return groups
 
 
-def _transduce_group(tokens: list[Token], edge_budget: int) -> tuple[list[Tree], int]:
+def _transduce_group(tokens: list[Token], edge_budget: int, use_cache: bool = True) -> tuple[list[Tree], int]:
     if len(tokens) > MAX_GROUP_TOKENS:
         return [_unparsed(tokens)], 0
-    tree, used = _parse(tokens, edge_budget)
+    tree, used = _parse(tokens, edge_budget, use_cache)
     lifted: list[Token] = []
     if tree is None and any(token.tag == "adv" for token in tokens):
         # Retry with free-floating adverbs lifted out, then reattach them clause-final.
         lifted = [token for token in tokens if token.tag == "adv"]
-        tree, retry_used = _parse([token for token in tokens if token.tag != "adv"], edge_budget - used)
+        tree, retry_used = _parse([token for token in tokens if token.tag != "adv"], edge_budget - used, use_cache)
         used += retry_used
     if tree is None:
         return [_unparsed(tokens)], used
@@ -963,13 +1035,13 @@ def _unparsed(tokens: list[Token]) -> Tree:
     return Tree("UNPARSED", [_pre(token) for token in tokens])
 
 
-def transduce(tokens: list[Token]) -> Tree:
+def transduce(tokens: list[Token], use_cache: bool = True) -> Tree:
     groups = _clause_groups(tokens)
     results: list[list[Tree]] = [[] for _ in groups]
     edge_budget = MAX_CHART_EDGES
     # Shortest groups spend the shared budget first, so one long clause cannot starve the short ones.
     for index in sorted(range(len(groups)), key=lambda position: (len(groups[position][1]), position)):
-        results[index], used = _transduce_group(groups[index][1], edge_budget)
+        results[index], used = _transduce_group(groups[index][1], edge_budget, use_cache)
         edge_budget -= used
 
     parts: list[Tree] = []
@@ -980,9 +1052,35 @@ def transduce(tokens: list[Token]) -> Tree:
     return Tree("ROOT", parts)
 
 
-def translate(raw_tokens: list[str]) -> Translation:
+# Everyday utterance shapes whose forests are parsed once at startup, so the first request of each shape
+# is not the slow one. They include the sentences Pitch Mode replays (frontend/src/lib/hud/simulated.ts).
+WARMUP_UTTERANCES: tuple[tuple[str, ...], ...] = (
+    ("um", "me", "w-w-water", "want"),
+    ("I", "I", "w-want", "to", "go", "to", "the", "store"),
+    ("can", "can", "you", "c-call", "my", "mom"),
+    ("where", "my", "shoes", "are"),
+    ("cold", "water", "please", "I", "want"),
+    ("i", "i", "need", "uh", "my", "m-m-medicine"),
+    ("the", "the", "b-bus", "is", "late"),
+    ("i", "am", "tired"),
+    ("help", "me", "please"),
+    ("i", "dont", "want", "it"),
+    ("what", "is", "your", "name"),
+    ("water", "please"),
+)
+
+
+def warm_parse_cache() -> int:
+    """Parses WARMUP_UTTERANCES into the forest cache; returns how many forests it holds."""
+    for tokens in WARMUP_UTTERANCES:
+        translate(list(tokens))
+    return len(_forests)
+
+
+def translate(raw_tokens: list[str], *, use_cache: bool = True) -> Translation:
+    """use_cache=False always runs the chart parser; the health check and the benchmark time that path."""
     start = time.perf_counter()
-    root = transduce(_lex(_normalize(raw_tokens)))
+    root = transduce(_lex(_normalize(raw_tokens)), use_cache)
     formatted = _render(root)
     parsed = root.pformat(margin=sys.maxsize)
     unparsed = sum(1 for part in root if part.label() == "UNPARSED")

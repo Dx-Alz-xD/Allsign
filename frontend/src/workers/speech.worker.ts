@@ -24,7 +24,7 @@
 import type { GrammarResponse, ProfileMode, SpeechSource } from '@shared/types';
 
 export interface SpeechWorkerConfig {
-  /** Backend origin, e.g. http://localhost:8000. */
+  /** Backend origin, e.g. http://127.0.0.1:8000. */
   apiBaseUrl: string;
   sourceLang: string;
   targetProfile: ProfileMode;

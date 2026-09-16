@@ -7,6 +7,7 @@ import { useModals } from '@/components/modals/ModalProvider';
 import { useSettings } from '@/components/providers/SettingsProvider';
 import { DirectPastePanel } from '@/components/ui/DirectPastePanel';
 import { HotkeyPanel } from '@/components/ui/HotkeyPanel';
+import { backendUrl } from '@/lib/api/client';
 import { serverHost } from '@/lib/settings/network';
 
 const METERED_PLACEHOLDER = 'your_metered_key_here';
@@ -23,7 +24,7 @@ export function SettingsView() {
   const meteredKey = process.env.NEXT_PUBLIC_METERED_API_KEY;
   const { stunUrls, turnUrl } = settings.network;
   const rows: ReadonlyArray<[label: string, value: string]> = [
-    ['Backend server', process.env.NEXT_PUBLIC_BACKEND_URL || 'Not set'],
+    ['Backend server', process.env.NEXT_PUBLIC_BACKEND_URL ? backendUrl() : `${backendUrl()} (default)`],
     ['STUN servers', stunUrls.length > 0 ? stunUrls.join(', ') : 'Not set'],
     ['TURN relay', turnUrl ? serverHost(turnUrl) : 'Not set'],
     ['Metered TURN key', meteredKey && meteredKey !== METERED_PLACEHOLDER ? 'Set' : 'Not set'],

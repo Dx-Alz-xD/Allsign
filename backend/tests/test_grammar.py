@@ -199,3 +199,79 @@ def test_translate_endpoint_accepts_the_largest_allowed_request(client: "TestCli
 def test_translate_endpoint_rejects_unsupported_language(client: "TestClient") -> None:
     response = client.post("/api/grammar/translate", json={"rawSpeechTokens": ["water"], "sourceLang": "hi"})
     assert response.status_code == 422
+
+
+def test_pitch_mode_samples_match_the_engine() -> None:
+    """frontend/src/lib/hud/simulated.ts shows these while the backend is offline, and replays their tokens live."""
+    import ast
+    import re
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "hud" / "simulated.ts").read_text(encoding="utf-8")
+    block = source.split("const SIMULATED_GRAMMAR", 1)[1].split("];", 1)[0]
+    samples = re.findall(
+        r"originalTokens: (\[[^\]]*\]),\s*formattedText: ('[^']*'),\s*parsedTree: ('[^']*')", block
+    )
+    assert len(samples) >= 4
+    for tokens, text, tree in samples:
+        result = grammar_engine.translate(ast.literal_eval(tokens))
+        assert (result.formatted_text, result.parsed_tree) == (ast.literal_eval(text), ast.literal_eval(tree))
+        assert result.unparsed_groups == 0
+
+
+# ---------------------------------------------------------------------------
+# Word-class forest cache
+# ---------------------------------------------------------------------------
+@pytest.fixture
+def empty_parse_cache():
+    grammar_engine.clear_parse_cache()
+    yield
+    grammar_engine.clear_parse_cache()
+
+
+def test_cached_parses_match_full_parses(empty_parse_cache: None) -> None:
+    for _ in range(2):  # the second pass is answered from the cache
+        for case in CASES:
+            full = grammar_engine.translate(case.tokens, use_cache=False)
+            cached = grammar_engine.translate(case.tokens)
+            assert (cached.formatted_text, cached.parsed_tree, cached.unparsed_groups) == (
+                full.formatted_text, full.parsed_tree, full.unparsed_groups,
+            ), case.tokens
+    assert 0 < len(grammar_engine._forests) <= grammar_engine.PARSE_CACHE_SIZE
+
+
+def test_a_cached_forest_is_refilled_with_new_words(empty_parse_cache: None) -> None:
+    assert grammar_engine.translate(["water", "me", "want"]).formatted_text == "I want water."
+    assert len(grammar_engine._forests) == 1
+    # Same word classes (noun, object pronoun, verb), different words: one forest, no words carried over.
+    result = grammar_engine.translate(["tea", "him", "need"])
+    assert len(grammar_engine._forests) == 1
+    assert result.formatted_text == "He needs tea."
+    assert "water" not in result.parsed_tree and "tea" in result.parsed_tree
+
+
+def test_the_edge_budget_still_applies_to_cached_forests(empty_parse_cache: None) -> None:
+    tokens = grammar_engine._lex(grammar_engine._normalize(["cold", "water", "I", "want"]))
+    tree, edges = grammar_engine._parse(tokens, grammar_engine.MAX_CHART_EDGES)
+    assert tree is not None
+    assert grammar_engine._parse(tokens, edges) == (grammar_engine._parse(tokens, edges)[0], edges)
+    assert grammar_engine._parse(tokens, edges - 1) == (None, edges - 1)
+    assert grammar_engine._parse(tokens, edges - 1, use_cache=False) == (None, edges - 1)
+
+
+def test_the_cache_is_bounded(empty_parse_cache: None, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(grammar_engine._forests, "size", 2)
+    for tokens in (["i", "want", "water"], ["where", "is", "it"], ["the", "bus", "is", "late"]):
+        grammar_engine.translate(tokens)
+    assert len(grammar_engine._forests) == 2
+
+
+def test_uncached_calls_leave_the_cache_alone(empty_parse_cache: None) -> None:
+    grammar_engine.translate(["i", "want", "water"], use_cache=False)
+    assert len(grammar_engine._forests) == 0
+
+
+def test_startup_warm_up_parses_every_shape(empty_parse_cache: None) -> None:
+    assert grammar_engine.warm_parse_cache() >= len(grammar_engine.WARMUP_UTTERANCES)
+    for tokens in grammar_engine.WARMUP_UTTERANCES:
+        assert grammar_engine.translate(list(tokens)).unparsed_groups == 0

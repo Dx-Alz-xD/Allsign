@@ -15,7 +15,8 @@ from pydantic import BaseModel
 import grammar_engine
 from config import get_settings
 from database import init_db
-from routers import phonemes, presets, sessions, signalling, triggers
+from routers import auth, phonemes, presets, sessions, signalling, triggers
+from web_auth.database import init_web_db
 
 # Garbled SOV probe so the healthcheck exercises normalization, parsing, ranking and reordering.
 PROBE_TOKENS = ["um", "me", "w-w-water", "want"]
@@ -44,7 +45,8 @@ class HealthResponse(BaseModel):
 
 
 def time_probe_parse() -> float:
-    result = grammar_engine.translate(PROBE_TOKENS)
+    # Always a full chart parse, so the reported latency is never a cache hit.
+    result = grammar_engine.translate(PROBE_TOKENS, use_cache=False)
     if result.formatted_text != PROBE_EXPECTED:
         raise RuntimeError(f"AST engine probe returned {result.formatted_text!r}, expected {PROBE_EXPECTED!r}")
     return result.latency_ms
@@ -69,8 +71,10 @@ async def lifespan(app: FastAPI):
     app.state.started_at = datetime.now(timezone.utc)
     app.state.started_monotonic = time.monotonic()
     init_db()
+    init_web_db()
     # Warm-up parse: fails startup on a broken grammar and keeps the first healthcheck from reading cold.
     time_probe_parse()
+    grammar_engine.warm_parse_cache()
     # Exempt the startup heap from GC scans; full collections over it stalled parses by 10-30ms.
     gc.collect()
     gc.freeze()
@@ -103,6 +107,8 @@ app.include_router(presets.router)
 app.include_router(sessions.router)
 app.include_router(phonemes.router)
 app.include_router(signalling.router)
+app.include_router(auth.router)
+app.include_router(auth.license_router)
 
 
 @app.get("/health/live", response_model=LiveHealth)

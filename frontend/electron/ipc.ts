@@ -6,6 +6,7 @@
 export type IpcInvokeChannel =
   | 'direct-paste:status'
   | 'direct-paste:type'
+  | 'direct-paste:shortcut'
   | 'direct-paste:request-permission'
   | 'hotkeys:status'
   | 'hotkeys:update'
@@ -56,6 +57,11 @@ export type DirectPasteResult =
   | { ok: true; method: 'type' | 'paste'; characters: number; submitted: boolean }
   | { ok: false; reason: DirectPasteFailure; message: string; status?: DirectPasteStatus };
 
+/** Presses one key combination in the focused app, e.g. "Control+Shift+M" (an OS_HOTKEY trigger). */
+export type ShortcutResult =
+  | { ok: true; accelerator: string }
+  | { ok: false; reason: DirectPasteFailure; message: string; status?: DirectPasteStatus };
+
 /* Global hotkeys ---------------------------------------------------------- */
 
 export type HotkeyAction = 'toggle-pitch-mode' | 'toggle-mute' | 'emergency-alert';
@@ -99,6 +105,8 @@ export interface OmniVoiceBridge {
   directPaste: {
     getStatus(): Promise<DirectPasteStatus>;
     type(request: DirectPasteRequest): Promise<DirectPasteResult>;
+    /** Presses an accelerator such as "Control+Shift+M" in the focused app. */
+    pressShortcut(accelerator: string): Promise<ShortcutResult>;
     /** macOS: shows the system prompt and opens Accessibility settings. Returns the refreshed status. */
     requestPermission(): Promise<DirectPasteStatus>;
   };

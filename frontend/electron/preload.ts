@@ -8,6 +8,7 @@ import type {
   IpcEventChannel,
   IpcInvokeChannel,
   OmniVoiceBridge,
+  ShortcutResult,
 } from './ipc';
 
 // Sandboxed preloads can only require 'electron', so channel names are checked against the
@@ -42,6 +43,7 @@ const bridge: OmniVoiceBridge = {
   directPaste: {
     getStatus: () => invoke<DirectPasteStatus>('direct-paste:status'),
     type: (request) => invoke<DirectPasteResult>('direct-paste:type', request),
+    pressShortcut: (accelerator) => invoke<ShortcutResult>('direct-paste:shortcut', accelerator),
     requestPermission: () => invoke<DirectPasteStatus>('direct-paste:request-permission'),
   },
   hotkeys: {

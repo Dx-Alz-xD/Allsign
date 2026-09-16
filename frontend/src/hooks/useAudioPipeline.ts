@@ -31,8 +31,16 @@ import type {
   TriggerWorkerRequest,
   TriggerWorkerResponse,
 } from '@/workers/trigger.worker';
+import type { CadenceConfig, CadenceRequest, CadenceResponse } from '@/workers/cadence.worker';
 import type { CaptureMessage } from '@/lib/worklets';
-import type { AcousticTriggerProfile, AudioTelemetryFrame, FormantData } from '@shared/types';
+import type { HudFrame } from '@/lib/hud/types';
+import type {
+  AcousticTriggerProfile,
+  AudioTelemetryFrame,
+  FluencyMetrics,
+  FormantData,
+  SessionAnalyticsInput,
+} from '@shared/types';
 
 /**
  * Hot-path snapshot. Held in a ref and mutated in place so the DSP cadence
@@ -66,7 +74,30 @@ export interface PipelineSnapshot {
   triggerBestSimilarity: number;
   lastTriggerId: string | null;
   lastTriggerAt: number;
+  cadence: CadenceSnapshot;
+  /** Newest 16 kHz PCM, oldest first; the oscilloscope trace. */
+  waveform: Float32Array;
   frameCount: number;
+}
+
+/** Latest cadence payload, flattened for in-place mutation. */
+export interface CadenceSnapshot {
+  wpm: number;
+  syllablesPerSecond: number;
+  vocalBlockDetected: boolean;
+  blockDurationMs: number;
+  blockCount: number;
+  blockedMs: number;
+  speakingMs: number;
+  pitchVolatilityHz: number;
+  utteranceActive: boolean;
+  ready: boolean;
+}
+
+/** Live DAF/FSF settings mirrored into FluencyMetrics; set by the session that owns the feedback node. */
+export interface FeedbackState {
+  dafDelayMs: number;
+  fsfOctaveShift: number;
 }
 
 /** Latest formant frame, flattened for in-place mutation. */
@@ -104,10 +135,15 @@ export interface UseAudioPipelineOptions {
   createFormantWorker?: () => Worker;
   /** Trigger list stays empty and no matches fire while absent. */
   createTriggerWorker?: () => Worker;
+  /** FluencyMetrics (rate, blocks, volatility) stay at zero while absent. */
+  createCadenceWorker?: () => Worker;
   config?: Partial<AudioWorkerConfig>;
   biomarkerConfig?: Partial<BiomarkerConfig>;
   formantConfig?: Partial<FormantWorkerConfig>;
   triggerConfig?: Partial<TriggerWorkerConfig>;
+  cadenceConfig?: Partial<CadenceConfig>;
+  /** Samples kept for the oscilloscope trace. */
+  waveformSize?: number;
   /** Called for every frame, before its spectral buffer is recycled. */
   onFrame?: (frame: Readonly<PipelineSnapshot>) => void;
   /** Called at the formant frame rate with the full frame (per-vowel scores). */
@@ -115,6 +151,8 @@ export interface UseAudioPipelineOptions {
   /** Fires once per acoustic trigger match; wire Direct Paste / TTS here. */
   onTriggerMatch?: (match: TriggerMatch) => void;
   onTriggerScores?: (best: TriggerScore | null, scores: TriggerScore[]) => void;
+  /** Non-fatal notices, e.g. the trigger store being unreachable. */
+  onWarning?: (message: string) => void;
   onError?: (message: string) => void;
 }
 
@@ -134,8 +172,18 @@ export interface AudioPipeline {
    * transfer and their buffers handed back to the worklet once analysed, so
    * steady state allocates nothing. Returns a detach function.
    */
-  attachCapture: (port: MessagePort) => () => void;
+  attachCapture: (port: MessagePort, onMessage?: (message: CaptureMessage) => void) => () => void;
   getTelemetryFrame: () => AudioTelemetryFrame | null;
+  getFluencyMetrics: () => FluencyMetrics;
+  /**
+   * One HUD render frame from the current snapshot: spectral bins mapped to
+   * 0..1 for display (the raw power stays in the snapshot), waveform, latency.
+   */
+  getHudFrame: () => HudFrame;
+  /** Session record so far, for POST /api/sessions when a session ends. */
+  getSessionStats: () => SessionAnalyticsInput;
+  /** Mirrors the feedback node's live DAF/FSF values into FluencyMetrics. */
+  setFeedbackState: (state: FeedbackState) => void;
   getFormantData: () => FormantData | null;
   /** IPA symbol from `vowelGeometry.vowels`, or null to clear. */
   setFormantTarget: (symbol: string | null) => void;
@@ -152,6 +200,10 @@ export interface AudioPipeline {
 
 const SPECTRAL_BIN_COUNT = 128;
 const MAX_POOLED_INPUTS = 8;
+const DEFAULT_WAVEFORM_SIZE = 512;
+/** Display mapping for spectral bins: 0..1 spans this dB range of Parseval power. */
+const DISPLAY_FLOOR_DB = -80;
+const DISPLAY_CEIL_DB = -10;
 
 function createSnapshot(binCount: number): PipelineSnapshot {
   return {
@@ -180,7 +232,24 @@ function createSnapshot(binCount: number): PipelineSnapshot {
     triggerBestSimilarity: 0,
     lastTriggerId: null,
     lastTriggerAt: 0,
+    cadence: createCadenceSnapshot(),
+    waveform: new Float32Array(DEFAULT_WAVEFORM_SIZE),
     frameCount: 0,
+  };
+}
+
+function createCadenceSnapshot(): CadenceSnapshot {
+  return {
+    wpm: 0,
+    syllablesPerSecond: 0,
+    vocalBlockDetected: false,
+    blockDurationMs: 0,
+    blockCount: 0,
+    blockedMs: 0,
+    speakingMs: 0,
+    pitchVolatilityHz: 0,
+    utteranceActive: false,
+    ready: false,
   };
 }
 
@@ -209,14 +278,18 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
     createBiomarkerWorker,
     createFormantWorker,
     createTriggerWorker,
+    createCadenceWorker,
     config,
     biomarkerConfig,
     formantConfig,
     triggerConfig,
+    cadenceConfig,
+    waveformSize = DEFAULT_WAVEFORM_SIZE,
     onFrame,
     onFormantFrame,
     onTriggerMatch,
     onTriggerScores,
+    onWarning,
     onError,
   } = options;
 
@@ -232,20 +305,26 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
   const biomarkerWorkerRef = useRef<Worker | null>(null);
   const formantWorkerRef = useRef<Worker | null>(null);
   const triggerWorkerRef = useRef<Worker | null>(null);
+  const cadenceWorkerRef = useRef<Worker | null>(null);
   const inputPoolRef = useRef<ArrayBuffer[]>([]);
   const capturePortRef = useRef<MessagePort | null>(null);
   const aliveRef = useRef(false);
+  const feedbackRef = useRef<FeedbackState>({ dafDelayMs: 0, fsfOctaveShift: 0 });
+  const sessionStartRef = useRef<number>(0);
+  const displayBinsRef = useRef<number[]>(new Array<number>(binCount).fill(0));
 
   // Read through refs so a caller passing inline closures cannot tear down workers.
   const onFrameRef = useRef(onFrame);
   const onFormantFrameRef = useRef(onFormantFrame);
   const onTriggerMatchRef = useRef(onTriggerMatch);
   const onTriggerScoresRef = useRef(onTriggerScores);
+  const onWarningRef = useRef(onWarning);
   const onErrorRef = useRef(onError);
   onFrameRef.current = onFrame;
   onFormantFrameRef.current = onFormantFrame;
   onTriggerMatchRef.current = onTriggerMatch;
   onTriggerScoresRef.current = onTriggerScores;
+  onWarningRef.current = onWarning;
   onErrorRef.current = onError;
 
   const fail = useCallback((message: string) => {
@@ -274,6 +353,12 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
 
     const triggerWorker = createTriggerWorker?.() ?? null;
     triggerWorkerRef.current = triggerWorker;
+
+    const cadenceWorker = createCadenceWorker?.() ?? null;
+    cadenceWorkerRef.current = cadenceWorker;
+
+    if (snapshot.waveform.length !== waveformSize) snapshot.waveform = new Float32Array(waveformSize);
+    sessionStartRef.current = performance.now();
 
     audioWorker.onmessage = (event: MessageEvent<AudioWorkerResponse>) => {
       const message = event.data;
@@ -423,6 +508,9 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
             fail(message.message);
             break;
           case 'ready':
+            if (aliveRef.current) setTriggers(message.triggers);
+            if (message.warning) onWarningRef.current?.(message.warning);
+            break;
           case 'triggers':
             if (aliveRef.current) setTriggers(message.triggers);
             break;
@@ -447,6 +535,42 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
 
       const request: TriggerWorkerRequest = { type: 'init', config: triggerConfig };
       triggerWorker.postMessage(request);
+    }
+
+    if (cadenceWorker) {
+      const channel = new MessageChannel();
+      const connectAudio: AudioWorkerRequest = { type: 'connect', port: channel.port1 };
+      audioWorker.postMessage(connectAudio, [channel.port1]);
+      const connectCadence: CadenceRequest = { type: 'connect', port: channel.port2 };
+      cadenceWorker.postMessage(connectCadence, [channel.port2]);
+
+      cadenceWorker.onmessage = (event: MessageEvent<CadenceResponse>) => {
+        const message = event.data;
+        if (message.type === 'error') {
+          fail(message.message);
+          return;
+        }
+        if (message.type !== 'cadence') return;
+        const { payload } = message;
+        const target = snapshotRef.current.cadence;
+        target.wpm = payload.wpm;
+        target.syllablesPerSecond = payload.syllablesPerSecond;
+        target.vocalBlockDetected = payload.vocalBlockDetected;
+        target.blockDurationMs = payload.blockDurationMs;
+        target.blockCount = payload.blockCount;
+        target.blockedMs = payload.blockedMs;
+        target.speakingMs = payload.speakingMs;
+        target.pitchVolatilityHz = payload.pitchVolatilityHz;
+        target.utteranceActive = payload.utteranceActive;
+        target.ready = true;
+      };
+
+      cadenceWorker.onerror = (event: ErrorEvent) => {
+        fail(event.message || 'cadence.worker failed to load');
+      };
+
+      const request: CadenceRequest = { type: 'init', config: cadenceConfig };
+      cadenceWorker.postMessage(request);
     }
 
     return () => {
@@ -478,6 +602,13 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
       }
       triggerWorkerRef.current = null;
 
+      if (cadenceWorker) {
+        cadenceWorker.onmessage = null;
+        cadenceWorker.onerror = null;
+        cadenceWorker.terminate();
+      }
+      cadenceWorkerRef.current = null;
+
       inputPoolRef.current = [];
       setStatus('idle');
       setVowelGeometry(null);
@@ -489,24 +620,43 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
     createBiomarkerWorker,
     createFormantWorker,
     createTriggerWorker,
+    createCadenceWorker,
     binCount,
+    waveformSize,
     fail,
   ]);
 
-  const pushPcmBuffer = useCallback((buffer: ArrayBuffer, length: number) => {
-    const worker = audioWorkerRef.current;
-    if (!worker) return;
-    const request: AudioWorkerRequest = { type: 'process', buffer, length };
-    worker.postMessage(request, [buffer]);
+  const recordWaveform = useCallback((samples: Float32Array) => {
+    const waveform = snapshotRef.current.waveform;
+    if (samples.length >= waveform.length) {
+      waveform.set(samples.subarray(samples.length - waveform.length));
+      return;
+    }
+    waveform.copyWithin(0, samples.length);
+    waveform.set(samples, waveform.length - samples.length);
   }, []);
 
+  const pushPcmBuffer = useCallback(
+    (buffer: ArrayBuffer, length: number) => {
+      const worker = audioWorkerRef.current;
+      if (!worker) return;
+      recordWaveform(new Float32Array(buffer, 0, length));
+      const request: AudioWorkerRequest = { type: 'process', buffer, length };
+      worker.postMessage(request, [buffer]);
+    },
+    [recordWaveform],
+  );
+
   const attachCapture = useCallback(
-    (port: MessagePort) => {
-      capturePortRef.current?.close();
+    (port: MessagePort, onMessage?: (message: CaptureMessage) => void) => {
+      if (capturePortRef.current && capturePortRef.current !== port) capturePortRef.current.onmessage = null;
       capturePortRef.current = port;
       port.onmessage = (event: MessageEvent<CaptureMessage>) => {
         const message = event.data;
-        if (message?.type !== 'pcm') return;
+        if (message?.type !== 'pcm') {
+          onMessage?.(message);
+          return;
+        }
         pushPcmBuffer(message.buffer, message.length);
       };
       return () => {
@@ -536,6 +686,7 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
     // output buffer every render quantum, and transferring would detach it.
     buffer ??= new ArrayBuffer(byteLength);
     new Float32Array(buffer).set(samples);
+    recordWaveform(samples);
 
     const request: AudioWorkerRequest = {
       type: 'process',
@@ -543,7 +694,7 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
       length: samples.length,
     };
     worker.postMessage(request, [buffer]);
-  }, []);
+  }, [recordWaveform]);
 
   const getTelemetryFrame = useCallback((): AudioTelemetryFrame | null => {
     const snapshot = snapshotRef.current;
@@ -560,6 +711,69 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
       hnrDb: snapshot.hnrDb,
       vocalStrainIndex: snapshot.vocalStrainIndex,
     };
+  }, []);
+
+  const getFluencyMetrics = useCallback((): FluencyMetrics => {
+    const { cadence } = snapshotRef.current;
+    const feedback = feedbackRef.current;
+    return {
+      wpm: cadence.wpm,
+      vocalBlockDetected: cadence.vocalBlockDetected,
+      blockDurationMs: cadence.blockDurationMs,
+      pitchVolatilityHz: cadence.pitchVolatilityHz,
+      dafDelayMs: feedback.dafDelayMs,
+      fsfOctaveShift: feedback.fsfOctaveShift,
+    };
+  }, []);
+
+  const getHudFrame = useCallback((): HudFrame => {
+    const snapshot = snapshotRef.current;
+    const source = snapshot.spectralBins;
+    const display = displayBinsRef.current;
+    if (display.length !== source.length) displayBinsRef.current = new Array<number>(source.length).fill(0);
+    const bins = displayBinsRef.current;
+    const span = DISPLAY_CEIL_DB - DISPLAY_FLOOR_DB;
+    for (let i = 0; i < source.length; i++) {
+      const power = source[i];
+      const db = power > 0 ? 10 * Math.log10(power) : DISPLAY_FLOOR_DB;
+      const value = (db - DISPLAY_FLOOR_DB) / span;
+      bins[i] = value < 0 ? 0 : value > 1 ? 1 : value;
+    }
+    return {
+      telemetry: {
+        timestamp: snapshot.timestamp || Date.now(),
+        volumeDb: snapshot.volumeDb,
+        pitchHz: snapshot.voiced ? snapshot.pitchHz : 0,
+        spectralBins: bins,
+        jitterPercent: snapshot.jitterPercent,
+        shimmerDb: snapshot.shimmerDb,
+        hnrDb: snapshot.hnrDb,
+        vocalStrainIndex: snapshot.vocalStrainIndex,
+      },
+      fluency: getFluencyMetrics(),
+      waveform: snapshot.waveform,
+      spectrumMaxHz: (config?.sampleRate ?? 16000) / 2,
+      latencyMs: snapshot.processingMs,
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [getFluencyMetrics, config?.sampleRate]);
+
+  const getSessionStats = useCallback((): SessionAnalyticsInput => {
+    const { cadence } = snapshotRef.current;
+    const elapsedSeconds = Math.max(0, Math.round((performance.now() - sessionStartRef.current) / 1000));
+    const spoken = cadence.speakingMs + cadence.blockedMs;
+    return {
+      profileMode: null,
+      wpm: Math.max(0, cadence.wpm),
+      stutterCount: cadence.blockCount,
+      avgBlockDurationMs: cadence.blockCount > 0 ? cadence.blockedMs / cadence.blockCount : 0,
+      fluencyPercentage: spoken > 0 ? Math.max(0, Math.min(100, 100 * (1 - cadence.blockedMs / spoken))) : 100,
+      sessionDurationSeconds: elapsedSeconds,
+    };
+  }, []);
+
+  const setFeedbackState = useCallback((state: FeedbackState) => {
+    feedbackRef.current = state;
   }, []);
 
   const getFormantData = useCallback((): FormantData | null => {
@@ -618,9 +832,12 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
     const snapshot = snapshotRef.current;
     const bins = snapshot.spectralBins;
     bins.fill(0);
+    const waveform = snapshot.waveform;
+    waveform.fill(0);
     const formantTarget = snapshot.formants.target;
-    Object.assign(snapshot, createSnapshot(bins.length), { spectralBins: bins });
+    Object.assign(snapshot, createSnapshot(bins.length), { spectralBins: bins, waveform });
     snapshot.formants.target = formantTarget;
+    sessionStartRef.current = performance.now();
 
     const resetAudio: AudioWorkerRequest = { type: 'reset' };
     audioWorkerRef.current?.postMessage(resetAudio);
@@ -630,6 +847,8 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
     formantWorkerRef.current?.postMessage(resetFormant);
     const resetTrigger: TriggerWorkerRequest = { type: 'reset' };
     triggerWorkerRef.current?.postMessage(resetTrigger);
+    const resetCadence: CadenceRequest = { type: 'reset' };
+    cadenceWorkerRef.current?.postMessage(resetCadence);
   }, []);
 
   return {
@@ -642,6 +861,10 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
     pushPcmBuffer,
     attachCapture,
     getTelemetryFrame,
+    getFluencyMetrics,
+    getHudFrame,
+    getSessionStats,
+    setFeedbackState,
     getFormantData,
     setFormantTarget,
     setFormantProfile,

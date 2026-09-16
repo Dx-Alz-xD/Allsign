@@ -9,12 +9,14 @@ import {
   type NativeImage,
   type WebFrameMain,
 } from 'electron';
+import { canonicalAccelerator } from './accelerator';
 import type {
   DirectPasteMode,
   DirectPasteRequest,
   DirectPasteResult,
   DirectPasteStatus,
   IpcInvokeChannel,
+  ShortcutResult,
 } from './ipc';
 
 type NutJs = typeof import('@nut-tree-fork/nut-js');
@@ -256,6 +258,90 @@ async function typeIntoFocusedApp(input: unknown, context: DirectPasteContext): 
   }
 }
 
+/* Shortcuts ----------------------------------------------------------------- */
+
+const MAX_SHORTCUT_KEYS = 4;
+
+/** Electron accelerator token -> nut.js Key name. Letters and digits map directly. */
+const SHORTCUT_KEY_NAMES: Record<string, string> = {
+  Command: 'LeftCmd',
+  Control: 'LeftControl',
+  Alt: 'LeftAlt',
+  AltGr: 'RightAlt',
+  Shift: 'LeftShift',
+  Super: 'LeftSuper',
+  Enter: 'Enter',
+  Space: 'Space',
+  Tab: 'Tab',
+  Escape: 'Escape',
+  Backspace: 'Backspace',
+  Delete: 'Delete',
+  Insert: 'Insert',
+  Up: 'Up',
+  Down: 'Down',
+  Left: 'Left',
+  Right: 'Right',
+  Home: 'Home',
+  End: 'End',
+  PageUp: 'PageUp',
+  PageDown: 'PageDown',
+  Plus: 'Add',
+  VolumeUp: 'AudioVolUp',
+  VolumeDown: 'AudioVolDown',
+  VolumeMute: 'AudioMute',
+  MediaPlayPause: 'AudioPlay',
+  MediaNextTrack: 'AudioNext',
+  MediaPreviousTrack: 'AudioPrev',
+  MediaStop: 'AudioStop',
+  PrintScreen: 'Print',
+};
+
+function shortcutKeys(accelerator: string, keys: Record<string, number>): number[] | null {
+  const canonical = canonicalAccelerator(accelerator, process.platform);
+  if (!canonical) return null;
+  const tokens = canonical.split('+');
+  if (tokens.length > MAX_SHORTCUT_KEYS) return null;
+  const resolved: number[] = [];
+  for (const token of tokens) {
+    let name = SHORTCUT_KEY_NAMES[token];
+    if (!name && /^[A-Z]$/.test(token)) name = token;
+    if (!name && /^[0-9]$/.test(token)) name = `Num${token}`;
+    if (!name && /^F([1-9]|1[0-9]|2[0-4])$/.test(token)) name = token;
+    const key = name ? keys[name] : undefined;
+    if (key === undefined) return null;
+    resolved.push(key);
+  }
+  return resolved;
+}
+
+async function pressShortcut(input: unknown, context: DirectPasteContext): Promise<ShortcutResult> {
+  if (typeof input !== 'string' || input.length === 0 || input.length > 64) {
+    return { ok: false, reason: 'invalid-request', message: 'Send an accelerator such as Control+Shift+M.' };
+  }
+  const status = getDirectPasteStatus();
+  if (status.state === 'needs-permission') return { ok: false, reason: 'permission-required', message: status.message, status };
+  const automation = status.state === 'unavailable' ? null : loadNut();
+  if (!automation) return { ok: false, reason: 'unavailable', message: status.message, status };
+  if (context.getWindow()?.isFocused()) {
+    return { ok: false, reason: 'omnivoice-focused', message: 'OmniVoice OS is the active window, so the shortcut was not sent.' };
+  }
+
+  const keys = shortcutKeys(input, automation.Key as unknown as Record<string, number>);
+  if (!keys) return { ok: false, reason: 'invalid-request', message: `"${input}" is not a shortcut this platform can press.` };
+
+  const { keyboard } = automation;
+  try {
+    try {
+      await keyboard.pressKey(...keys);
+    } finally {
+      await keyboard.releaseKey(...keys);
+    }
+    return { ok: true, accelerator: input };
+  } catch (error) {
+    return { ok: false, reason: 'failed', message: `Shortcut failed: ${error instanceof Error ? error.message : String(error)}`, status };
+  }
+}
+
 /* IPC --------------------------------------------------------------------- */
 
 export interface DirectPasteIpcOptions extends DirectPasteContext {
@@ -265,6 +351,7 @@ export interface DirectPasteIpcOptions extends DirectPasteContext {
 const CHANNELS = {
   status: 'direct-paste:status',
   type: 'direct-paste:type',
+  shortcut: 'direct-paste:shortcut',
   requestPermission: 'direct-paste:request-permission',
 } as const satisfies Record<string, IpcInvokeChannel>;
 
@@ -289,6 +376,13 @@ export function registerDirectPasteIpc(options: DirectPasteIpcOptions): () => vo
     return result;
   });
 
+  ipcMain.handle(CHANNELS.shortcut, (event, accelerator: unknown) => {
+    guard(event);
+    const result = queue.then(() => pressShortcut(accelerator, options));
+    queue = result.catch(() => undefined);
+    return result;
+  });
+
   ipcMain.handle(CHANNELS.requestPermission, async (event) => {
     guard(event);
     if (process.platform === 'darwin' && !isMacTrusted(false)) {
@@ -301,4 +395,4 @@ export function registerDirectPasteIpc(options: DirectPasteIpcOptions): () => vo
   return () => Object.values(CHANNELS).forEach((channel) => ipcMain.removeHandler(channel));
 }
 
-export const directPasteForTesting = { typeIntoFocusedApp, sanitize, resolveMethod, parseRequest };
+export const directPasteForTesting = { typeIntoFocusedApp, sanitize, resolveMethod, parseRequest, shortcutKeys };

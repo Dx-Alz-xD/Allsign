@@ -1,7 +1,7 @@
 import type { LucideIcon } from 'lucide-react';
-import { Accessibility, ChartNoAxesColumn, House, Settings, Zap } from 'lucide-react';
+import { Accessibility, ChartNoAxesColumn, House, Radio, Settings, Zap } from 'lucide-react';
 
-export type ViewId = 'home' | 'analytics' | 'triggers' | 'settings' | 'accessibility';
+export type ViewId = 'home' | 'analytics' | 'triggers' | 'caregiver' | 'settings' | 'accessibility';
 
 export interface NavItem {
   id: ViewId;
@@ -28,6 +28,12 @@ export const NAV_ITEMS: readonly NavItem[] = [
     label: 'Custom Triggers',
     description: 'Sounds you can make, linked to phrases or actions.',
     icon: Zap,
+  },
+  {
+    id: 'caregiver',
+    label: 'Caregiver Link',
+    description: 'Share live telemetry and alerts with a trusted device, or watch a speaker as their caregiver.',
+    icon: Radio,
   },
   {
     id: 'settings',

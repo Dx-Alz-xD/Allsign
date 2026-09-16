@@ -9,6 +9,7 @@ export type {
   HotkeyStatus,
   HotkeyUpdateResult,
   OmniVoiceBridge,
+  ShortcutResult,
 } from '../../electron/ipc';
 
 declare global {

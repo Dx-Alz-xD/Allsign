@@ -634,6 +634,160 @@ describe('biomarker.worker (via audio.worker)', () => {
 });
 
 // ---------------------------------------------------------------------------
+// trigger.worker.ts matcher parity with backend/acoustic_matcher.py
+
+describe('trigger.worker spectral matcher (port of acoustic_matcher.py)', () => {
+  // Values produced by the Python reference for the same three spectra.
+  const REFERENCE = {
+    levelDb: [-29.305556, -29.7297, -30.255119],
+    peaks: [
+      [0, 13, 53, 93],
+      [4, 44, 84, 124],
+      [0, 37, 76, 116],
+    ],
+    bandRatio: [0.98015393, 0.97534332, 0.95146228],
+    similarity: [
+      [1.0, 0.09353773, 0.0577851],
+      [0.10969429, 1.0, 0.09364652],
+      [0.05387606, 0.11446804, 1.0],
+    ],
+  };
+  const spectrum = (seed: number) =>
+    Array.from({ length: 128 }, (_, i) => 10 ** ((Math.sin(i / 7 + seed) * 20 + Math.cos(i / 3 + seed * 2) * 8 - 60 - i / 8) / 10));
+
+  function matcher() {
+    const worker = loadWorker('trigger.worker.ts');
+    return worker.sandbox as {
+      spectralProfile: (bins: ArrayLike<number>) => { levelDb: number; peaks: number[]; bandRatio: number };
+      similarity: (a: unknown, b: unknown) => number;
+    };
+  }
+
+  it('profiles spectra exactly like the Python reference', () => {
+    const { spectralProfile } = matcher();
+    [0.3, 1.7, 2.9].forEach((seed, index) => {
+      const profile = spectralProfile(spectrum(seed));
+      expect(profile.levelDb).toBeCloseTo(REFERENCE.levelDb[index], 5);
+      expect(profile.peaks).toEqual(REFERENCE.peaks[index]);
+      expect(profile.bandRatio).toBeCloseTo(REFERENCE.bandRatio[index], 7);
+    });
+  });
+
+  it('scores pairs exactly like the Python reference', () => {
+    const { spectralProfile, similarity } = matcher();
+    const profiles = [0.3, 1.7, 2.9].map((seed) => spectralProfile(spectrum(seed)));
+    profiles.forEach((query, q) => {
+      profiles.forEach((template, t) => {
+        expect(similarity(query, template)).toBeCloseTo(REFERENCE.similarity[q][t], 7);
+      });
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// audio.worker.ts -> cadence.worker.ts (FluencyMetrics)
+
+describe('cadence.worker (via audio.worker)', () => {
+  const F = [600, 1300, 2500, 3500, 4500];
+  const BW = [70, 90, 120, 180, 220];
+
+  type Payload = {
+    wpm: number;
+    syllablesPerSecond: number;
+    vocalBlockDetected: boolean;
+    blockDurationMs: number;
+    blockCount: number;
+    blockedMs: number;
+    speakingMs: number;
+    pitchVolatilityHz: number;
+    utteranceActive: boolean;
+    timestamp: number;
+  };
+
+  function pipeline(config: Record<string, unknown> = {}) {
+    const audio = loadWorker('audio.worker.ts');
+    const cadence = loadWorker('cadence.worker.ts');
+    audio.send({ type: 'init', config: {} });
+    cadence.send({ type: 'init', config });
+    const ready = cadence.drain()[0] as { type: string };
+    const channel = makeChannel();
+    audio.send({ type: 'connect', port: channel.port1 });
+    cadence.send({ type: 'connect', port: channel.port2 });
+    audio.drain();
+    const feed = (pcm: Float32Array): Payload[] => {
+      const out: Payload[] = [];
+      for (let off = 0; off + HOP <= pcm.length; off += HOP) {
+        const buffer = new ArrayBuffer(HOP * 4);
+        new Float32Array(buffer).set(pcm.subarray(off, off + HOP));
+        audio.send({ type: 'process', buffer, length: HOP });
+        for (const m of audio.drain() as Array<{ type: string; message?: string }>) if (m.type === 'error') throw new Error(m.message);
+        for (const m of cadence.drain() as Array<{ type: string; message?: string; payload?: Payload }>) {
+          if (m.type === 'error') throw new Error(m.message);
+          if (m.type === 'cadence') out.push(m.payload as Payload);
+        }
+      }
+      return out;
+    };
+    return { ready, feed };
+  }
+
+  /** Voice with a syllable-rate amplitude modulation; `gaps` (seconds) are cut to silence. */
+  function syllables(seconds: number, perSecond: number, gaps: Array<[number, number]> = []): Float32Array {
+    const voice = synthVowel({ sampleRate: SR16, seconds, f0: 120, formants: F, bandwidths: BW });
+    for (let i = 0; i < voice.length; i++) {
+      const t = i / SR16;
+      const envelope = 0.35 + 0.65 * Math.pow(0.5 - 0.5 * Math.cos(2 * Math.PI * perSecond * t), 2);
+      voice[i] *= envelope;
+      for (const [from, to] of gaps) if (t >= from && t < to) voice[i] = 0;
+    }
+    return voice;
+  }
+
+  it('is ready', () => {
+    expect(pipeline().ready.type).toBe('ready');
+  });
+
+  it.each([3, 5])('estimates speaking rate from %i syllables per second', (rate) => {
+    const { feed } = pipeline();
+    const out = feed(addNoise(syllables(4, rate), 35));
+    const late = out.slice(-10);
+    const measured = median(late.map((p) => p.syllablesPerSecond));
+    expect(Math.abs(measured - rate) / rate).toBeLessThan(0.25);
+    expect(median(late.map((p) => p.wpm))).toBeCloseTo((measured * 60) / 1.5, 0);
+    expect(late.every((p) => !p.vocalBlockDetected)).toBe(true);
+  }, SLOW);
+
+  it('flags a voicing gap inside an utterance as a block, and a long pause as the end of it', () => {
+    const { feed } = pipeline();
+    // 1.5 s speech, 0.7 s block, 1.5 s speech, 5 s silence.
+    const out = feed(addNoise(syllables(8.7, 4, [[1.5, 2.2], [3.7, 8.7]]), 35));
+    const during = out.filter((p) => p.timestamp > 1900 && p.timestamp < 2200);
+    expect(during.some((p) => p.vocalBlockDetected)).toBe(true);
+    const afterResume = out.find((p) => p.timestamp > 2400)!;
+    expect(afterResume.vocalBlockDetected).toBe(false);
+    expect(afterResume.blockCount).toBe(1);
+    expect(afterResume.blockDurationMs).toBeGreaterThan(500);
+    expect(afterResume.blockDurationMs).toBeLessThan(900);
+    const last = out[out.length - 1];
+    expect(last.blockCount).toBe(1);
+    expect(last.vocalBlockDetected).toBe(false);
+    expect(last.utteranceActive).toBe(false);
+    expect(last.speakingMs).toBeGreaterThan(2500);
+    expect(last.speakingMs).toBeLessThan(3300);
+  }, SLOW);
+
+  it('measures pitch volatility', () => {
+    const steady = pipeline();
+    const wobbly = pipeline();
+    const flat = median(steady.feed(addNoise(synthVowel({ sampleRate: SR16, seconds: 2, f0: 120, formants: F, bandwidths: BW }), 35)).slice(-5).map((p) => p.pitchVolatilityHz));
+    const voice = synthVowel({ sampleRate: SR16, seconds: 2, f0: 120, formants: F, bandwidths: BW, jitter: 0.03, seed: 4 });
+    const shaky = median(wobbly.feed(addNoise(voice, 35)).slice(-5).map((p) => p.pitchVolatilityHz));
+    expect(flat).toBeLessThan(2);
+    expect(shaky).toBeGreaterThan(flat * 3);
+  }, SLOW);
+});
+
+// ---------------------------------------------------------------------------
 // audio.worker.ts -> trigger.worker.ts
 
 describe('trigger.worker (via audio.worker spectral port)', () => {
@@ -717,7 +871,7 @@ describe('trigger.worker (via audio.worker spectral port)', () => {
     expect(live.filter((e) => e.type === 'match')).toHaveLength(0);
     const scores = live.filter((e) => e.type === 'scores');
     expect(scores.length).toBeGreaterThan(0);
-    expect(Math.max(...scores.map((s) => s.best?.similarity ?? 0))).toBeLessThan(0.85);
+    expect(Math.max(...scores.map((s) => s.best?.similarity ?? 0))).toBeLessThan(0.7);
   });
 
   it('stays quiet on silence once the analysis window has drained', async () => {

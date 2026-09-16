@@ -1,20 +1,25 @@
 /**
  * Acoustic trigger matcher for low-vocal users: hums, grunts and pitch rises
  * enrolled as 128-bin spectral fingerprints, matched frame by frame against
- * the live spectrum by Euclidean distance.
+ * the live spectrum.
+ *
+ * Scoring is a line-for-line port of backend/acoustic_matcher.py, so a
+ * trigger's threshold means the same thing here as in `POST /api/triggers/
+ * match` and in the backend's evaluation report:
+ *   score = 0.6 * shape + 0.2 * band + 0.2 * peaks
+ * on a 3-bin-smoothed dB envelope (bin 0 dropped, floored 30 dB below its
+ * maximum): correlation of the mean-removed envelopes, the query's share of
+ * power inside the template's strongest band, and prominent-peak overlap
+ * within two bins. Frames below the -60 dB silence floor never match.
  *
  * Spectra arrive as SpectralPackets over a MessagePort from audio.worker.ts
- * (one per 10 ms hop, ~0.05 ms to score), or as `frame` messages from the
- * main thread. Both are normalised the same way: bin energy -> dB above a
- * floor 40 dB under the frame peak (floor bins become 0, so only the peaks
- * carry weight and the noise floor cannot make two sounds look alike), then
- * unit length, which also makes the comparison level-invariant. For unit
- * vectors the Euclidean distance is in [0, 2] and similarity = 1 - distance / 2.
+ * (one per 10 ms hop) or as `frame` messages; the query is the mean power of
+ * the last `smoothingFrames` frames. A match needs `minConsecutiveFrames`
+ * above threshold and is followed by a refractory hold-off.
  *
- * A match needs `minConsecutiveFrames` above the trigger's threshold and is
- * followed by a refractory hold-off, so one 20 ms blip never fires twice.
- * Profiles persist to IndexedDB (workers have it); an in-memory store takes
- * over where it is unavailable, e.g. tests.
+ * Profiles live in the backend's SQLite store when `apiBaseUrl` is set (the
+ * worker talks to /api/triggers directly); otherwise in IndexedDB, or in
+ * memory where neither exists (tests).
  */
 
 import type { SpectralPacket, SpectralPortMessage } from '@/workers/audio.worker';
@@ -25,11 +30,9 @@ export interface TriggerWorkerConfig {
   binCount: number;
   /** Used when a profile carries no threshold of its own. */
   defaultThreshold: number;
-  /** Frames below this level are neither scored nor enrolled. */
-  activityFloorDb: number;
-  /** Bins more than this far below the frame peak count as zero (dB). */
-  peakFloorDb: number;
-  /** Live frames averaged before scoring; 1 disables smoothing. */
+  /** Frames whose summed power is below this (dB) never match or enrol. */
+  silenceFloorDb: number;
+  /** Frames averaged (raw power) before scoring; the backend evaluates ~120 ms. */
   smoothingFrames: number;
   /** Consecutive frames above threshold required to fire. */
   minConsecutiveFrames: number;
@@ -43,6 +46,8 @@ export interface TriggerWorkerConfig {
   captureTimeoutMs: number;
   /** Frame period, used to convert the durations above; 10 ms at a 160 hop. */
   frameMs: number;
+  /** Backend origin, e.g. http://localhost:8000. Empty = local IndexedDB store. */
+  apiBaseUrl: string;
 }
 
 export interface TriggerMatch {
@@ -87,7 +92,7 @@ export type TriggerWorkerRequest =
   | { type: 'close' };
 
 export type TriggerWorkerResponse =
-  | { type: 'ready'; config: TriggerWorkerConfig; triggers: AcousticTriggerProfile[] }
+  | { type: 'ready'; config: TriggerWorkerConfig; triggers: AcousticTriggerProfile[]; warning?: string }
   | { type: 'triggers'; triggers: AcousticTriggerProfile[] }
   | { type: 'enrolled'; profile: AcousticTriggerProfile }
   | { type: 'captureProgress'; id: string; frames: number; needed: number }
@@ -107,30 +112,174 @@ const ctx = self as unknown as WorkerScope;
 const DEFAULT_CONFIG: TriggerWorkerConfig = {
   binCount: 128,
   defaultThreshold: 0.85,
-  activityFloorDb: -50,
-  peakFloorDb: 40,
-  smoothingFrames: 3,
+  silenceFloorDb: -60,
+  smoothingFrames: 6,
   minConsecutiveFrames: 2,
   refractoryMs: 500,
   scoreEveryFrames: 5,
   captureDurationMs: 400,
   captureTimeoutMs: 5000,
   frameMs: 10,
+  apiBaseUrl: '',
 };
+
+// Matcher constants, identical to backend/acoustic_matcher.py.
+const SILENT_DB = -120;
+const SMOOTHING_BINS = 3;
+const DYNAMIC_RANGE_DB = 30;
+const SUPPORT_RANGE_DB = 15;
+const SHAPE_WEIGHT = 0.6;
+const BAND_WEIGHT = 0.2;
+const PEAK_WEIGHT = 0.2;
+const MAX_PEAKS = 6;
+const PEAK_PROMINENCE_DB = 6;
+const PEAK_TOLERANCE_BINS = 2;
 
 const DB_NAME = 'omnivoice';
 const DB_VERSION = 1;
 const STORE_NAME = 'acousticTriggers';
-const LOG_FLOOR = 1e-12;
 
 const clamp01 = (value: number): number => (value < 0 ? 0 : value > 1 ? 1 : value);
+
+// ---------------------------------------------------------------------------
+// Spectral profile and similarity (port of acoustic_matcher.py)
+
+export interface SpectralProfile {
+  levelDb: number;
+  shape: Float64Array;
+  peaks: number[];
+  support: number[];
+  bandRatio: number;
+  powers: Float64Array;
+  totalPower: number;
+}
+
+function toDb(power: number): number {
+  return power > 0 ? Math.max(SILENT_DB, 10 * Math.log10(power)) : SILENT_DB;
+}
+
+function smooth(values: Float64Array): Float64Array {
+  const reach = SMOOTHING_BINS >> 1;
+  const out = new Float64Array(values.length);
+  for (let i = 0; i < values.length; i++) {
+    const from = Math.max(0, i - reach);
+    const to = Math.min(values.length - 1, i + reach);
+    let sum = 0;
+    for (let k = from; k <= to; k++) sum += values[k];
+    out[i] = sum / (to - from + 1);
+  }
+  return out;
+}
+
+function prominentPeaks(envelope: Float64Array): number[] {
+  const sorted = Array.from(envelope).sort((a, b) => a - b);
+  const median = sorted[sorted.length >> 1];
+  const last = envelope.length - 1;
+  const candidates: number[] = [];
+  for (let i = 0; i < envelope.length; i++) {
+    const value = envelope[i];
+    if (value - median < PEAK_PROMINENCE_DB) continue;
+    if (i > 0 && value < envelope[i - 1]) continue;
+    if (i < last && value <= envelope[i + 1]) continue;
+    candidates.push(i);
+  }
+  candidates.sort((a, b) => envelope[b] - envelope[a] || a - b);
+  return candidates.slice(0, MAX_PEAKS).sort((a, b) => a - b);
+}
+
+export function spectralProfile(bins: ArrayLike<number>): SpectralProfile {
+  const n = bins.length - 1;
+  // Bin 0 is DC and mains hum territory; it carries no trigger identity.
+  const powers = new Float64Array(n);
+  let totalPower = 0;
+  let level = 0;
+  for (let i = 0; i < bins.length; i++) {
+    level += bins[i];
+    if (i > 0) {
+      powers[i - 1] = bins[i];
+      totalPower += bins[i];
+    }
+  }
+
+  const envelope = smooth(Float64Array.from(powers, toDb));
+  let top = -Infinity;
+  for (let i = 0; i < n; i++) if (envelope[i] > top) top = envelope[i];
+
+  const floored = new Float64Array(n);
+  let mean = 0;
+  for (let i = 0; i < n; i++) {
+    floored[i] = Math.max(envelope[i], top - DYNAMIC_RANGE_DB);
+    mean += floored[i];
+  }
+  mean /= n;
+  const shape = new Float64Array(n);
+  let norm = 0;
+  for (let i = 0; i < n; i++) {
+    shape[i] = floored[i] - mean;
+    norm += shape[i] * shape[i];
+  }
+  norm = Math.sqrt(norm);
+  if (norm > 0) for (let i = 0; i < n; i++) shape[i] /= norm;
+  else shape.fill(0);
+
+  const support: number[] = [];
+  let supportPower = 0;
+  for (let i = 0; i < n; i++) {
+    if (envelope[i] >= top - SUPPORT_RANGE_DB) {
+      support.push(i);
+      supportPower += powers[i];
+    }
+  }
+
+  return {
+    levelDb: toDb(level),
+    shape,
+    peaks: prominentPeaks(envelope),
+    support,
+    bandRatio: totalPower > 0 ? supportPower / totalPower : 0,
+    powers,
+    totalPower,
+  };
+}
+
+function peakRecall(reference: number[], other: number[]): number {
+  let hits = 0;
+  for (const peak of reference) {
+    if (other.some((candidate) => Math.abs(peak - candidate) <= PEAK_TOLERANCE_BINS)) hits++;
+  }
+  return hits / reference.length;
+}
+
+export function similarity(query: SpectralProfile, template: SpectralProfile): number {
+  let dot = 0;
+  for (let i = 0; i < query.shape.length; i++) dot += query.shape[i] * template.shape[i];
+  const shape = Math.max(0, dot);
+
+  let band = 0;
+  if (query.totalPower > 0 && template.bandRatio > 0) {
+    let inBand = 0;
+    for (const index of template.support) inBand += query.powers[index];
+    band = Math.min(1, inBand / query.totalPower / template.bandRatio);
+  }
+
+  let peaks: number;
+  if (query.peaks.length > 0 && template.peaks.length > 0) {
+    peaks = (peakRecall(template.peaks, query.peaks) + peakRecall(query.peaks, template.peaks)) / 2;
+  } else {
+    peaks = query.peaks.length > 0 || template.peaks.length > 0 ? 0 : 1;
+  }
+
+  return SHAPE_WEIGHT * shape + BAND_WEIGHT * band + PEAK_WEIGHT * peaks;
+}
 
 // ---------------------------------------------------------------------------
 // Persistence
 
 interface TriggerStore {
   load(): Promise<AcousticTriggerProfile[]>;
-  put(profile: AcousticTriggerProfile): Promise<void>;
+  /** Creates or replaces; the returned profile carries the store's id. */
+  save(profile: AcousticTriggerProfile, exists: boolean): Promise<AcousticTriggerProfile>;
+  patch(id: string, changes: Partial<AcousticTriggerProfile>): Promise<AcousticTriggerProfile>;
   remove(id: string): Promise<void>;
 }
 
@@ -141,8 +290,17 @@ class MemoryStore implements TriggerStore {
     return [...this.items.values()];
   }
 
-  async put(profile: AcousticTriggerProfile): Promise<void> {
+  async save(profile: AcousticTriggerProfile): Promise<AcousticTriggerProfile> {
     this.items.set(profile.id, profile);
+    return profile;
+  }
+
+  async patch(id: string, changes: Partial<AcousticTriggerProfile>): Promise<AcousticTriggerProfile> {
+    const current = this.items.get(id);
+    if (!current) throw new Error(`Unknown trigger: ${id}`);
+    const next = { ...current, ...changes, id };
+    this.items.set(id, next);
+    return next;
   }
 
   async remove(id: string): Promise<void> {
@@ -158,9 +316,7 @@ class IndexedDbStore implements TriggerStore {
       const request = indexedDB.open(DB_NAME, DB_VERSION);
       request.onupgradeneeded = () => {
         const db = request.result;
-        if (!db.objectStoreNames.contains(STORE_NAME)) {
-          db.createObjectStore(STORE_NAME, { keyPath: 'id' });
-        }
+        if (!db.objectStoreNames.contains(STORE_NAME)) db.createObjectStore(STORE_NAME, { keyPath: 'id' });
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error ?? new Error('IndexedDB open failed'));
@@ -168,14 +324,10 @@ class IndexedDbStore implements TriggerStore {
     return this.db;
   }
 
-  private async transaction<T>(
-    mode: IDBTransactionMode,
-    run: (store: IDBObjectStore) => IDBRequest<T>,
-  ): Promise<T> {
+  private async transaction<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
     const db = await this.open();
     return new Promise((resolve, reject) => {
-      const tx = db.transaction(STORE_NAME, mode);
-      const request = run(tx.objectStore(STORE_NAME));
+      const request = run(db.transaction(STORE_NAME, mode).objectStore(STORE_NAME));
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error ?? new Error('IndexedDB request failed'));
     });
@@ -185,8 +337,17 @@ class IndexedDbStore implements TriggerStore {
     return this.transaction('readonly', (store) => store.getAll() as IDBRequest<AcousticTriggerProfile[]>);
   }
 
-  async put(profile: AcousticTriggerProfile): Promise<void> {
+  async save(profile: AcousticTriggerProfile): Promise<AcousticTriggerProfile> {
     await this.transaction('readwrite', (store) => store.put(profile));
+    return profile;
+  }
+
+  async patch(id: string, changes: Partial<AcousticTriggerProfile>): Promise<AcousticTriggerProfile> {
+    const current = await this.transaction('readonly', (store) => store.get(id) as IDBRequest<AcousticTriggerProfile | undefined>);
+    if (!current) throw new Error(`Unknown trigger: ${id}`);
+    const next = { ...current, ...changes, id };
+    await this.transaction('readwrite', (store) => store.put(next));
+    return next;
   }
 
   async remove(id: string): Promise<void> {
@@ -194,7 +355,47 @@ class IndexedDbStore implements TriggerStore {
   }
 }
 
-function createStore(): TriggerStore {
+/** The backend's SQLite triggers via /api/triggers; the server assigns ids. */
+class BackendStore implements TriggerStore {
+  constructor(private readonly baseUrl: string) {}
+
+  private async request<T>(path: string, init?: RequestInit): Promise<T> {
+    const response = await fetch(`${this.baseUrl}${path}`, {
+      ...init,
+      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+    });
+    if (!response.ok) {
+      const detail = await response.text().catch(() => '');
+      throw new Error(`Trigger store ${init?.method ?? 'GET'} ${path} failed: ${response.status} ${detail}`.trim());
+    }
+    return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
+  }
+
+  load(): Promise<AcousticTriggerProfile[]> {
+    return this.request<AcousticTriggerProfile[]>('/api/triggers?limit=500');
+  }
+
+  save(profile: AcousticTriggerProfile, exists: boolean): Promise<AcousticTriggerProfile> {
+    const { id, ...body } = profile;
+    return exists
+      ? this.request<AcousticTriggerProfile>(`/api/triggers/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify(body) })
+      : this.request<AcousticTriggerProfile>('/api/triggers', { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  patch(id: string, changes: Partial<AcousticTriggerProfile>): Promise<AcousticTriggerProfile> {
+    return this.request<AcousticTriggerProfile>(`/api/triggers/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(changes),
+    });
+  }
+
+  remove(id: string): Promise<void> {
+    return this.request<void>(`/api/triggers/${encodeURIComponent(id)}`, { method: 'DELETE' });
+  }
+}
+
+function createStore(apiBaseUrl: string): TriggerStore {
+  if (apiBaseUrl && typeof fetch === 'function') return new BackendStore(apiBaseUrl.replace(/\/+$/, ''));
   return typeof indexedDB === 'undefined' ? new MemoryStore() : new IndexedDbStore();
 }
 
@@ -203,7 +404,7 @@ function createStore(): TriggerStore {
 
 interface EnrolledTrigger {
   profile: AcousticTriggerProfile;
-  vector: Float32Array;
+  template: SpectralProfile;
   threshold: number;
   consecutive: number;
   lastMatchAt: number;
@@ -231,25 +432,22 @@ class TriggerMatcher {
   private readonly triggers: EnrolledTrigger[] = [];
   private readonly ports: MessagePort[] = [];
 
-  private readonly scratch: Float32Array;
-  private readonly smoothed: Float32Array;
-  private readonly history: Float32Array[];
+  private readonly history: Float64Array[];
+  private readonly query: Float64Array;
   private historyCount = 0;
   private historyNext = 0;
   private frameIndex = 0;
-  private lastTimestamp = 0;
   private capture: CaptureState | null = null;
 
-  constructor(config: Partial<TriggerWorkerConfig> = {}, store: TriggerStore = createStore()) {
+  constructor(config: Partial<TriggerWorkerConfig> = {}, store?: TriggerStore) {
     this.config = { ...DEFAULT_CONFIG, ...config };
     const { binCount, smoothingFrames } = this.config;
     if (binCount < 8) throw new Error(`binCount must be >= 8, received ${binCount}`);
     if (smoothingFrames < 1) throw new Error('smoothingFrames must be >= 1');
-    this.store = store;
-    this.scratch = new Float32Array(binCount);
-    this.smoothed = new Float32Array(binCount);
+    this.store = store ?? createStore(this.config.apiBaseUrl);
+    this.query = new Float64Array(binCount);
     this.history = [];
-    for (let i = 0; i < smoothingFrames; i++) this.history.push(new Float32Array(binCount));
+    for (let i = 0; i < smoothingFrames; i++) this.history.push(new Float64Array(binCount));
   }
 
   get currentConfig(): TriggerWorkerConfig {
@@ -303,32 +501,33 @@ class TriggerMatcher {
 
   async enroll(profile: AcousticTriggerProfile): Promise<AcousticTriggerProfile> {
     if (profile.spectralFingerprint.length !== this.config.binCount) {
-      throw new Error(
-        `Fingerprint has ${profile.spectralFingerprint.length} bins, expected ${this.config.binCount}`,
-      );
+      throw new Error(`Fingerprint has ${profile.spectralFingerprint.length} bins, expected ${this.config.binCount}`);
     }
-    const stored: AcousticTriggerProfile = {
-      ...profile,
-      spectralFingerprint: Array.from(profile.spectralFingerprint),
-      threshold: clamp01(profile.threshold ?? this.config.defaultThreshold),
-    };
-    await this.store.put(stored);
+    const exists = this.triggers.some((trigger) => trigger.profile.id === profile.id);
+    const stored = await this.store.save(
+      {
+        ...profile,
+        spectralFingerprint: Array.from(profile.spectralFingerprint),
+        threshold: clamp01(profile.threshold ?? this.config.defaultThreshold),
+      },
+      exists,
+    );
+    if (exists && stored.id !== profile.id) this.drop(profile.id);
     this.add(stored);
     return { ...stored };
   }
 
   async remove(id: string): Promise<void> {
     await this.store.remove(id);
-    const index = this.triggers.findIndex((trigger) => trigger.profile.id === id);
-    if (index >= 0) this.triggers.splice(index, 1);
+    this.drop(id);
   }
 
   async setThreshold(id: string, threshold: number): Promise<void> {
     const trigger = this.triggers.find((item) => item.profile.id === id);
     if (!trigger) throw new Error(`Unknown trigger: ${id}`);
-    trigger.threshold = clamp01(threshold);
-    trigger.profile = { ...trigger.profile, threshold: trigger.threshold };
-    await this.store.put(trigger.profile);
+    const stored = await this.store.patch(id, { threshold: clamp01(threshold) });
+    trigger.threshold = clamp01(stored.threshold ?? threshold);
+    trigger.profile = { ...trigger.profile, ...stored, threshold: trigger.threshold };
   }
 
   startCapture(request: CaptureRequest): CaptureState {
@@ -351,113 +550,72 @@ class TriggerMatcher {
     return id;
   }
 
+  private drop(id: string): void {
+    const index = this.triggers.findIndex((trigger) => trigger.profile.id === id);
+    if (index >= 0) this.triggers.splice(index, 1);
+  }
+
   private add(profile: AcousticTriggerProfile): void {
-    const existing = this.triggers.findIndex((trigger) => trigger.profile.id === profile.id);
-    const vector = new Float32Array(this.config.binCount);
-    this.normalise(profile.spectralFingerprint, vector);
     const trigger: EnrolledTrigger = {
       profile,
-      vector,
+      template: spectralProfile(profile.spectralFingerprint),
       threshold: clamp01(profile.threshold ?? this.config.defaultThreshold),
       consecutive: 0,
       lastMatchAt: -Infinity,
     };
+    const existing = this.triggers.findIndex((item) => item.profile.id === profile.id);
     if (existing >= 0) this.triggers[existing] = trigger;
     else this.triggers.push(trigger);
-  }
-
-  /**
-   * Energy bins -> dB above the frame's floor -> unit vector. Silence maps to
-   * the zero vector, which is equidistant from everything (similarity 0.29)
-   * and can never clear a sensible threshold.
-   */
-  private normalise(bins: ArrayLike<number>, out: Float32Array): void {
-    const n = out.length;
-    let peak = 0;
-    for (let i = 0; i < n; i++) if (bins[i] > peak) peak = bins[i];
-    if (!(peak > 0)) {
-      out.fill(0);
-      return;
-    }
-
-    const floor = 10 * Math.log10(peak) - this.config.peakFloorDb;
-    let norm = 0;
-    for (let i = 0; i < n; i++) {
-      const above = 10 * Math.log10(bins[i] + LOG_FLOOR) - floor;
-      out[i] = above > 0 ? above : 0;
-      norm += out[i] * out[i];
-    }
-    norm = Math.sqrt(norm);
-    if (norm > 0) {
-      for (let i = 0; i < n; i++) out[i] /= norm;
-    } else {
-      out.fill(0);
-    }
   }
 
   /** Scores one frame; returns matches fired and, when due, the score table. */
   handleFrame(bins: ArrayLike<number>, timestamp: number, volumeDb: number | undefined): FrameResult {
     const started = performance.now();
-    const { activityFloorDb, smoothingFrames, minConsecutiveFrames, refractoryMs, scoreEveryFrames } =
-      this.config;
+    const { silenceFloorDb, smoothingFrames, minConsecutiveFrames, refractoryMs, scoreEveryFrames } = this.config;
     this.frameIndex++;
-    this.lastTimestamp = timestamp;
 
     const matches: TriggerMatch[] = [];
     const captureEvents: TriggerWorkerResponse[] = [];
 
-    // Silence: nothing to score, streaks break, capture may time out.
-    let active = volumeDb === undefined || volumeDb >= activityFloorDb;
-    if (active) {
-      let energy = 0;
-      for (let i = 0; i < bins.length; i++) energy += bins[i];
-      if (!(energy > 0)) active = false;
+    // The mean power of the last few frames is the query, as in the backend evaluation.
+    this.history[this.historyNext].set(bins as ArrayLike<number> & { length: number });
+    this.historyNext = (this.historyNext + 1) % smoothingFrames;
+    if (this.historyCount < smoothingFrames) this.historyCount++;
+    const query = this.query;
+    query.fill(0);
+    for (let h = 0; h < this.historyCount; h++) {
+      const frame = this.history[h];
+      for (let i = 0; i < query.length; i++) query[i] += frame[i];
     }
+    for (let i = 0; i < query.length; i++) query[i] /= this.historyCount;
+
+    const profile = spectralProfile(query);
+    const active = profile.levelDb >= silenceFloorDb && (volumeDb === undefined || volumeDb >= silenceFloorDb);
     if (!active) {
       for (const trigger of this.triggers) trigger.consecutive = 0;
       captureEvents.push(...this.captureTick(null, timestamp));
       return { matches, scores: null, capture: captureEvents };
     }
-
-    this.normalise(bins, this.scratch);
     captureEvents.push(...this.captureTick(bins, timestamp));
-
-    let vector = this.scratch;
-    if (smoothingFrames > 1) {
-      this.history[this.historyNext].set(this.scratch);
-      this.historyNext = (this.historyNext + 1) % smoothingFrames;
-      if (this.historyCount < smoothingFrames) this.historyCount++;
-
-      const smoothed = this.smoothed;
-      smoothed.fill(0);
-      for (let h = 0; h < this.historyCount; h++) {
-        const frame = this.history[h];
-        for (let i = 0; i < smoothed.length; i++) smoothed[i] += frame[i];
-      }
-      let norm = 0;
-      for (let i = 0; i < smoothed.length; i++) norm += smoothed[i] * smoothed[i];
-      norm = Math.sqrt(norm);
-      if (norm > 0) for (let i = 0; i < smoothed.length; i++) smoothed[i] /= norm;
-      vector = smoothed;
-    }
 
     const scores: TriggerScore[] = [];
     let best: TriggerScore | null = null;
+    let bestTrigger: EnrolledTrigger | null = null;
 
     for (const trigger of this.triggers) {
-      const target = trigger.vector;
-      let sum = 0;
-      for (let i = 0; i < vector.length; i++) {
-        const d = vector[i] - target[i];
-        sum += d * d;
+      const score = clamp01(similarity(profile, trigger.template));
+      const entry = { id: trigger.profile.id, similarity: score };
+      scores.push(entry);
+      if (!best || score > best.similarity) {
+        best = entry;
+        bestTrigger = trigger;
       }
-      const distance = Math.sqrt(sum);
-      const similarity = clamp01(1 - distance / 2);
-      const score = { id: trigger.profile.id, similarity };
-      scores.push(score);
-      if (!best || similarity > best.similarity) best = score;
+    }
 
-      if (similarity < trigger.threshold) {
+    // Only the best candidate can fire, and only above its own threshold (as in the backend).
+    for (const trigger of this.triggers) {
+      const own = trigger === bestTrigger && best !== null && best.similarity >= trigger.threshold;
+      if (!own) {
         trigger.consecutive = 0;
         continue;
       }
@@ -472,19 +630,16 @@ class TriggerMatcher {
         name: trigger.profile.name,
         mappedPhrase: trigger.profile.mappedPhrase,
         targetAction: trigger.profile.targetAction,
-        similarity,
-        distance,
+        similarity: best!.similarity,
+        distance: 1 - best!.similarity,
         threshold: trigger.threshold,
         timestamp,
         latencyMs: performance.now() - started,
       });
     }
 
-    const scoresDue =
-      scoreEveryFrames > 0 && this.triggers.length > 0 && this.frameIndex % scoreEveryFrames === 0;
-    const scoresMessage: TriggerWorkerResponse | null = scoresDue
-      ? { type: 'scores', timestamp, best, scores }
-      : null;
+    const scoresDue = scoreEveryFrames > 0 && this.triggers.length > 0 && this.frameIndex % scoreEveryFrames === 0;
+    const scoresMessage: TriggerWorkerResponse | null = scoresDue ? { type: 'scores', timestamp, best, scores } : null;
 
     return { matches, scores: scoresMessage, capture: captureEvents };
   }
@@ -511,12 +666,7 @@ class TriggerMatcher {
 
     if (capture.frames < capture.needed) {
       if (capture.frames % 5 === 0) {
-        events.push({
-          type: 'captureProgress',
-          id: capture.request.id,
-          frames: capture.frames,
-          needed: capture.needed,
-        });
+        events.push({ type: 'captureProgress', id: capture.request.id, frames: capture.frames, needed: capture.needed });
       }
       return events;
     }
@@ -568,6 +718,8 @@ function dispatch(result: FrameResult): void {
   for (const event of result.capture) ctx.postMessage(event);
 }
 
+const failed = (error: unknown): void => fail(error instanceof Error ? error.message : String(error));
+
 ctx.onmessage = (event: MessageEvent) => {
   const request = event.data as TriggerWorkerRequest;
 
@@ -581,14 +733,16 @@ ctx.onmessage = (event: MessageEvent) => {
           .load()
           .then((triggers) => {
             if (matcher !== next) return;
-            const response: TriggerWorkerResponse = {
-              type: 'ready',
-              config: next.currentConfig,
-              triggers,
-            };
+            const response: TriggerWorkerResponse = { type: 'ready', config: next.currentConfig, triggers };
             ctx.postMessage(response);
           })
-          .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
+          .catch((error: unknown) => {
+            // An unreachable store must not take the matcher down: start empty and say so.
+            if (matcher !== next) return;
+            const warning = error instanceof Error ? error.message : String(error);
+            const response: TriggerWorkerResponse = { type: 'ready', config: next.currentConfig, triggers: [], warning };
+            ctx.postMessage(response);
+          });
         break;
       }
 
@@ -619,7 +773,7 @@ ctx.onmessage = (event: MessageEvent) => {
             ctx.postMessage(response);
             postTriggers();
           })
-          .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
+          .catch(failed);
         break;
       }
 
@@ -647,19 +801,13 @@ ctx.onmessage = (event: MessageEvent) => {
 
       case 'remove': {
         if (!matcher) return;
-        void matcher
-          .remove(request.id)
-          .then(postTriggers)
-          .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
+        void matcher.remove(request.id).then(postTriggers).catch(failed);
         break;
       }
 
       case 'setThreshold': {
         if (!matcher) return;
-        void matcher
-          .setThreshold(request.id, request.threshold)
-          .then(postTriggers)
-          .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
+        void matcher.setThreshold(request.id, request.threshold).then(postTriggers).catch(failed);
         break;
       }
 
@@ -685,6 +833,6 @@ ctx.onmessage = (event: MessageEvent) => {
       }
     }
   } catch (error) {
-    fail(error instanceof Error ? error.message : String(error));
+    failed(error);
   }
 };

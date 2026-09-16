@@ -4,7 +4,13 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { ClipboardPaste, Gauge, Radio, type LucideIcon } from 'lucide-react';
 import type { SystemState } from '@shared/types';
 import { PitchModeDashboard } from '@/components/PitchModeDashboard';
-import { useSimulatedHudSession } from '@/hooks/useSimulatedHudSession';
+import { AphasiaPanel } from '@/components/profiles/AphasiaPanel';
+import { ClearVoicePanel } from '@/components/profiles/ClearVoicePanel';
+import { FluencyPanel } from '@/components/profiles/FluencyPanel';
+import { SensoryPanel } from '@/components/profiles/SensoryPanel';
+import { TherapyPanel } from '@/components/profiles/TherapyPanel';
+import { VocalAssistPanel } from '@/components/profiles/VocalAssistPanel';
+import { useSession } from '@/components/providers/SessionProvider';
 import { getProfilePreset } from '@/lib/profiles';
 import { cn } from '@/lib/cn';
 
@@ -29,11 +35,11 @@ function StatusItem({ icon: Icon, label, value, detail, live = false }: StatusIt
   );
 }
 
-function SimulatedPitchDashboard() {
-  const session = useSimulatedHudSession();
+function LivePitchDashboard() {
+  const session = useSession();
   return (
     <PitchModeDashboard
-      source={session.source}
+      source={session.isSimulated ? session.demoTelemetry : session.telemetry}
       peer={session.peer}
       grammar={session.grammar}
       isSimulated={session.isSimulated}
@@ -42,7 +48,7 @@ function SimulatedPitchDashboard() {
 }
 
 export function HomeView({ state }: { state: SystemState }) {
-  if (state.activeProfile === 'pitch_demo') return <SimulatedPitchDashboard />;
+  if (state.activeProfile === 'pitch_demo') return <LivePitchDashboard />;
 
   const preset = getProfilePreset(state.activeProfile);
   const Icon = preset.icon;
@@ -72,6 +78,13 @@ export function HomeView({ state }: { state: SystemState }) {
           </AnimatePresence>
         </div>
       </section>
+
+      {state.activeProfile === 'clearvoice' && <ClearVoicePanel />}
+      {state.activeProfile === 'fluency' && <FluencyPanel />}
+      {state.activeProfile === 'vocal_assist' && <VocalAssistPanel />}
+      {state.activeProfile === 'therapy' && <TherapyPanel />}
+      {state.activeProfile === 'aphasia' && <AphasiaPanel />}
+      {state.activeProfile === 'sensory' && <SensoryPanel />}
 
       <section aria-labelledby="status-heading" className="glass rounded-2xl">
         <h2 id="status-heading" className="px-5 pt-4 text-base font-semibold text-ink">
@@ -103,8 +116,8 @@ export function HomeView({ state }: { state: SystemState }) {
           <StatusItem
             icon={Gauge}
             label="Processing latency"
-            value={hasLatency ? `${state.latencyMs.toFixed(1)} ms` : 'No audio yet'}
-            detail="Target is under 15 ms."
+            value={hasLatency ? `${state.latencyMs.toFixed(2)} ms` : 'No audio yet'}
+            detail="Per analysis frame. Target is under 15 ms."
             live={hasLatency}
           />
         </dl>

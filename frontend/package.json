@@ -9,7 +9,12 @@
     "typecheck": "tsc --noEmit && tsc -p electron --noEmit",
     "electron:compile": "tsc -p electron",
     "electron:dev": "npm run electron:compile && electron . --dev",
-    "electron:start": "npm run build && npm run electron:compile && electron ."
+    "electron:start": "npm run build && npm run electron:compile && electron .",
+    "prebuild": "node scripts/sync-worklets.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "worklets:sync": "node scripts/sync-worklets.mjs",
+    "worklets:check": "node scripts/sync-worklets.mjs --check"
   },
   "keywords": [],
   "type": "commonjs",
@@ -32,6 +37,7 @@
     "electron-builder": "^26.15.3",
     "postcss": "^8.5.28",
     "tailwindcss": "^3.4.19",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
   }
 }

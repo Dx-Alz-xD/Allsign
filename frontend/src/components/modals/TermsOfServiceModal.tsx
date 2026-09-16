@@ -7,16 +7,16 @@ import { useModals } from '@/components/modals/ModalProvider';
 import { useSettings } from '@/components/providers/SettingsProvider';
 import { TERMS_VERSION } from '@/lib/settings/schema';
 
-export const TERMS_LAST_UPDATED = '16 September 2026';
+export const TERMS_LAST_UPDATED = '17 September 2026';
 
 export type TermsSection = 'medical' | 'emergency' | 'accessibility';
 
 const KEY_POINTS: readonly string[] = [
-  'OmniVoice OS is an assistive communication tool, not a medical device.',
+  'Voicematics is an assistive communication tool, not a medical device.',
   'It does not diagnose, treat, or monitor any health condition.',
   'The emergency alert does not contact emergency services.',
-  'Check reconstructed text before you send it.',
-  'You have the right to use OmniVoice OS in whatever way works for you, with any assistive technology.',
+  'Check reconstructed text, and any clinical report summary written by AI, before you share it.',
+  'You have the right to use Voicematics in whatever way works for you, with any assistive technology.',
 ];
 
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
@@ -67,7 +67,7 @@ export function TermsOfServiceModal({ open, onClose, section }: TermsOfServiceMo
       open={open}
       onClose={onClose}
       title="Terms of service"
-      description={`The rules for using OmniVoice OS and the rights you keep. Last updated ${TERMS_LAST_UPDATED}.`}
+      description={`The rules for using Voicematics and the rights you keep. Last updated ${TERMS_LAST_UPDATED}.`}
       size="lg"
       bodyRef={bodyRef}
       footer={
@@ -108,7 +108,7 @@ export function TermsOfServiceModal({ open, onClose, section }: TermsOfServiceMo
 
         <Section id="terms-medical" title="Not a medical device">
           <p>
-            OmniVoice OS is not a medical device and has not been cleared or approved by the FDA, CE marked, or reviewed
+            Voicematics is not a medical device and has not been cleared or approved by the FDA, CE marked, or reviewed
             by any other medical regulator.
           </p>
           <p>
@@ -135,7 +135,7 @@ export function TermsOfServiceModal({ open, onClose, section }: TermsOfServiceMo
           <p>
             The alert shows a message on screen, can read it aloud, and can notify a connected caregiver. Caregiver alerts
             depend on your network, any relay server, and the caregiver&apos;s device, so they can be delayed or fail. Do not
-            rely on OmniVoice OS as your only way to get help.
+            rely on Voicematics as your only way to get help.
           </p>
         </Section>
 
@@ -153,7 +153,7 @@ export function TermsOfServiceModal({ open, onClose, section }: TermsOfServiceMo
         <Section id="terms-accessibility" title="Your accessibility rights">
           <ul className="list-disc space-y-2 pl-5">
             <li>
-              <strong>Accessible by design.</strong> OmniVoice OS aims to meet WCAG 2.1 Level AA. Controls work with a
+              <strong>Accessible by design.</strong> Voicematics aims to meet WCAG 2.1 Level AA. Controls work with a
               keyboard and are labelled for screen readers, and live visuals have text equivalents.
             </li>
             <li>
@@ -172,7 +172,7 @@ export function TermsOfServiceModal({ open, onClose, section }: TermsOfServiceMo
               speech. Session analytics are for you, and nobody sees them unless you choose to share them.
             </li>
             <li>
-              <strong>Report barriers.</strong> If something is hard or impossible to use, tell the OmniVoice team.
+              <strong>Report barriers.</strong> If something is hard or impossible to use, tell the Voicematics team.
               Accessibility problems are treated as high-priority bugs, and you can ask for this information in another
               format.
             </li>
@@ -183,9 +183,9 @@ export function TermsOfServiceModal({ open, onClose, section }: TermsOfServiceMo
           </ul>
         </Section>
 
-        <Section id="terms-use" title="Using OmniVoice OS">
+        <Section id="terms-use" title="Using Voicematics">
           <p>
-            You may use OmniVoice OS for personal communication and in clinical or educational settings. Do not use it to
+            You may use Voicematics for personal communication and in clinical or educational settings. Do not use it to
             impersonate someone, to share another person&apos;s information without their consent, or to break the law.
             Connect a caregiver only when both of you agree to share.
           </p>
@@ -199,9 +199,33 @@ export function TermsOfServiceModal({ open, onClose, section }: TermsOfServiceMo
           </p>
         </Section>
 
+        <Section id="terms-account" title="Your account and plan">
+          <p>
+            Voicematics runs with a Voicematics account. Keep your password to yourself; you are responsible for what happens
+            in your account. You can sign out of a computer, or delete your account and everything saved with it, at any time
+            under Account.
+          </p>
+          <p>
+            <strong>Free</strong> includes ClearVoice, Aphasia Mode, the Sensory HUD, Pitch Demo, and one acoustic trigger.{' '}
+            <strong>Pro</strong> and <strong>Lifetime</strong> add the Fluency Coach, Therapy Mode, unlimited triggers, sharing
+            over the Caregiver Link, session analytics, and clinical reports. Plans are bought and managed on the Voicematics
+            website.
+          </p>
+          <p>
+            A paid licence works on one computer at a time. Move it to another computer from Account. When a monthly or
+            annual plan is cancelled or not renewed, Pro features stay available until the end of the period you paid for,
+            then the account returns to Free. Your saved data stays in your account: sessions remain yours to download or
+            delete, and triggers beyond the Free limit are paused until you upgrade again.
+          </p>
+          <p>
+            Clinical reports compute their numbers from your measurements, and an AI model writes the summary paragraph. The
+            summary can be wrong. A report is not a diagnosis and does not replace a clinician&apos;s judgement.
+          </p>
+        </Section>
+
         <Section id="terms-liability" title="No warranty">
           <p>
-            OmniVoice OS is provided as is, without warranties of any kind. To the extent the law allows, its makers are
+            Voicematics is provided as is, without warranties of any kind. To the extent the law allows, its makers are
             not liable for harm that results from relying on its measurements, reconstructed text, or alerts.
           </p>
         </Section>

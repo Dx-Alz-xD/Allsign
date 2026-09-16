@@ -2,8 +2,9 @@
 
 - GET  /api/agent/status           which providers are configured (the website hides the widget otherwise)
 - POST /api/agent/chat             the onboarding assistant, with its tool calls listed in the answer
-- POST /api/agent/generate-report  session log -> ClinicalReport
+- POST /api/agent/generate-report  session log -> ClinicalReport (Voicematics Pro: clinical_reports)
 - POST /api/agent/compile-grammar  plain-text request -> validated rules appended to grammars/user_custom.cfg
+                                   (signed in; only a local-mode install may save to that shared file)
 
 All three agents run on the thread pool (the model calls block) and answer 503 when no provider is
 configured. Requests are rate limited per client address because every call costs model tokens.
@@ -22,6 +23,7 @@ from pydantic_ai.exceptions import AgentRunError, UnexpectedModelBehavior
 from agents import assistant, cfg_compiler, telemetry_reporter
 from agents.llm import AgentUnavailable, agent_model, configured_providers
 from config import get_settings
+from ownership import CurrentAccount, require_feature
 
 router = APIRouter(prefix="/api/agent", tags=["agents"])
 log = logging.getLogger("agents")
@@ -117,12 +119,17 @@ def chat(payload: assistant.ChatRequest, _: Limited) -> assistant.ChatResponse:
 
 
 @router.post("/generate-report", response_model=telemetry_reporter.ClinicalReport)
-def generate_report(payload: telemetry_reporter.SessionLog, _: Limited) -> telemetry_reporter.ClinicalReport:
+def generate_report(
+    payload: telemetry_reporter.SessionLog, _: Limited, __: Annotated[None, require_feature("clinical_reports")]
+) -> telemetry_reporter.ClinicalReport:
     model = require_model()
     return run(telemetry_reporter.generate_report, payload, model=model)
 
 
 @router.post("/compile-grammar", response_model=cfg_compiler.CompiledGrammar)
-def compile_grammar(payload: CompileGrammarRequest, _: Limited) -> cfg_compiler.CompiledGrammar:
+def compile_grammar(payload: CompileGrammarRequest, _: Limited, account: CurrentAccount) -> cfg_compiler.CompiledGrammar:
     model = require_model()
-    return run(cfg_compiler.compile_grammar, payload.prompt, model=model, save=payload.save)
+    # grammars/user_custom.cfg is one file for the whole server, so accounts on a hosted backend only get the
+    # validated rules back; the answer's `saved` says which happened.
+    save = payload.save and account.id is None
+    return run(cfg_compiler.compile_grammar, payload.prompt, model=model, save=save)

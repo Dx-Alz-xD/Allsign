@@ -39,7 +39,7 @@ export function DirectPastePanel() {
   const [inDesktopApp, setInDesktopApp] = useState<boolean | null>(null);
   const [status, setStatus] = useState<DirectPasteStatus | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [testText, setTestText] = useState('Hello from OmniVoice');
+  const [testText, setTestText] = useState('Hello from Voicematics');
   const [countdown, setCountdown] = useState<number | null>(null);
   const [result, setResult] = useState<DirectPasteResult | null>(null);
 
@@ -118,7 +118,7 @@ export function DirectPastePanel() {
       </div>
 
       {inDesktopApp === false && (
-        <p className="mt-4 text-mist">Direct paste works in the desktop app. You are viewing OmniVoice OS in a browser.</p>
+        <p className="mt-4 text-mist">Direct paste works in the desktop app. You are viewing Voicematics in a browser.</p>
       )}
       {loadError && <p className="mt-4 text-warn">Could not check direct paste: {loadError}</p>}
 

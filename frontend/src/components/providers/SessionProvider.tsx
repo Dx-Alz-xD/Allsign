@@ -35,12 +35,15 @@ import type {
   GrammarResponse,
   ProfileMode,
   SessionAnalytics,
+  SessionLog,
   SpeechSource,
 } from '@shared/types';
+import { useAccount } from '@/components/providers/AccountProvider';
 import { useSettings } from '@/components/providers/SettingsProvider';
 import { useAudioPipeline, type AudioPipeline } from '@/hooks/useAudioPipeline';
 import { makeAlert, performTriggerAction, typeIntoActiveApp, type ActionOutcome } from '@/lib/actions';
-import { api, backendUrl, backendWebSocketUrl } from '@/lib/api/client';
+import { SessionLogRecorder } from '@/lib/analytics/sessionLog';
+import { api, backendUrl, backendWebSocketUrl, getAuthToken } from '@/lib/api/client';
 import { getAudioEngine, type EngineSnapshot, type FluencySettings } from '@/lib/audio/engine';
 import { DEMO_TOKEN_SCRIPT, startSimulatedAudio, simulatedGrammarAt, simulatedPeerAt } from '@/lib/hud/simulated';
 import { createTelemetryStore } from '@/lib/hud/store';
@@ -139,7 +142,12 @@ export interface SessionContextValue {
   backendOnline: boolean | null;
   warning: string | null;
 
+  /** Saves the session to the account's history; null when it is too short or the plan has no analytics. */
   recordSession: () => Promise<SessionAnalytics | null>;
+  /** Biomarker samples, feedback changes and blocks of the current session, for a clinical report. */
+  getSessionLog: () => SessionLog | null;
+  /** Starts the session statistics and the report log over, keeping the microphone on. */
+  startNewSession: () => void;
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
@@ -160,6 +168,10 @@ const DEFAULT_FEEDBACK: FluencySettings = { dafDelayMs: 60, fsfOctaveShift: 0, f
 
 export function SessionProvider({ profile, muted, children }: SessionProviderProps) {
   const { settings } = useSettings();
+  const account = useAccount();
+  const analyticsRef = useRef(account.has('analytics'));
+  analyticsRef.current = account.has('analytics');
+  const sessionLogRef = useRef(new SessionLogRecorder());
   const engine = useMemo(() => getAudioEngine(), []);
   const [engineSnapshot, setEngineSnapshot] = useState<EngineSnapshot>(() => engine.getSnapshot());
   const [warning, setWarning] = useState<string | null>(null);
@@ -221,7 +233,12 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
   const createFormantWorker = useCallback(() => new Worker(new URL('../../workers/formant.worker.ts', import.meta.url)), []);
   const createTriggerWorker = useCallback(() => new Worker(new URL('../../workers/trigger.worker.ts', import.meta.url)), []);
   const createCadenceWorker = useCallback(() => new Worker(new URL('../../workers/cadence.worker.ts', import.meta.url)), []);
-  const triggerConfig = useMemo(() => ({ apiBaseUrl: backendUrl() }), []);
+  // Read once when the worker starts; later changes arrive through setTriggerAccount below.
+  const triggerConfig = useMemo(
+    () => ({ apiBaseUrl: backendUrl(), authToken: getAuthToken() ?? '', triggerLimit: account.entitlements.triggerLimit }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [],
+  );
 
   const onTriggerMatch = useCallback(
     (match: TriggerMatch) => {
@@ -245,7 +262,23 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
     onWarning: setWarning,
     onError: setWarning,
   });
-  const { attachCapture, getHudFrame, setFeedbackState: mirrorFeedback, getSessionStats, reset: resetPipeline } = pipeline;
+  const {
+    attachCapture,
+    getHudFrame,
+    setFeedbackState: mirrorFeedback,
+    getSessionStats,
+    reset: resetPipeline,
+    setTriggerAccount,
+  } = pipeline;
+
+  // Each confirmation of the account (every few minutes, on focus, after renewal) also re-reads its triggers,
+  // so ones saved on another computer show up here.
+  const confirmedRef = useRef(account.refreshedAt);
+  useEffect(() => {
+    const reload = account.refreshedAt !== confirmedRef.current;
+    confirmedRef.current = account.refreshedAt;
+    setTriggerAccount(account.token ?? '', account.entitlements.triggerLimit, reload);
+  }, [account.entitlements.triggerLimit, account.refreshedAt, account.token, setTriggerAccount]);
 
   // --- engine --------------------------------------------------------------
 
@@ -262,13 +295,14 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
     engine.applyFluency(feedback);
     engine.setFeedbackEnabled(feedbackEnabled);
     resetPipeline();
+    sessionLogRef.current.start(performance.now());
   }, [attachCapture, engine, feedback, feedbackEnabled, resetPipeline, settings.audio.inputDeviceId, settings.audio.outputDeviceId]);
 
   const live = engineSnapshot.state === 'running' && pipeline.status === 'running';
 
   const recordSession = useCallback(async (): Promise<SessionAnalytics | null> => {
     const stats = getSessionStats();
-    if (stats.sessionDurationSeconds < MIN_SESSION_SECONDS) return null;
+    if (stats.sessionDurationSeconds < MIN_SESSION_SECONDS || !analyticsRef.current) return null;
     try {
       return await api.sessions.record({ ...stats, profileMode: profileRef.current });
     } catch (error) {
@@ -297,6 +331,22 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
   );
 
   useEffect(() => {
+    sessionLogRef.current.feedbackChanged(feedbackEnabled, feedback.dafDelayMs, feedback.fsfOctaveShift, performance.now());
+  }, [feedback.dafDelayMs, feedback.fsfOctaveShift, feedbackEnabled]);
+
+  const startNewSession = useCallback(() => {
+    resetPipeline();
+    sessionLogRef.current.start(performance.now());
+  }, [resetPipeline]);
+
+  const getSessionLog = useCallback((): SessionLog | null => {
+    const recorder = sessionLogRef.current;
+    if (!recorder.started) return null;
+    const { speakingMs, ready } = pipeline.snapshotRef.current.cadence;
+    return recorder.toLog(profileRef.current, ready ? speakingMs : null, performance.now());
+  }, [pipeline.snapshotRef]);
+
+  useEffect(() => {
     engine.applyFluency(feedback);
     mirrorFeedback({
       dafDelayMs: feedbackEnabled ? feedback.dafDelayMs : 0,
@@ -320,6 +370,18 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       ticks += 1;
 
       const snapshot = pipeline.snapshotRef.current;
+      sessionLogRef.current.sample(
+        {
+          voiced: snapshot.voiced,
+          biomarkersReady: snapshot.biomarkersReady,
+          jitterPercent: snapshot.jitterPercent,
+          shimmerDb: snapshot.shimmerDb,
+          hnrDb: snapshot.hnrDb,
+          strainIndex: snapshot.vocalStrainIndex,
+          pitchHz: snapshot.pitchHz,
+        },
+        performance.now(),
+      );
       // While cadence.worker hears an utterance, speech.worker holds its idle flush so a block does not split a sentence.
       if (snapshot.cadence.utteranceActive !== voiceActive) {
         voiceActive = snapshot.cadence.utteranceActive;
@@ -332,6 +394,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       if (vocalBlockDetected && !blocked) blocksAtStart = blockCount;
       if (!vocalBlockDetected && blocked && blockCount >= blocksAtStart) {
         const alert = makeAlert('vocal-block', 'Vocal block', blockDurationMs);
+        sessionLogRef.current.block(blockDurationMs, performance.now());
         pushAlert(alert);
         broadcastToCaregiver({ type: 'alert', alert });
       }
@@ -570,6 +633,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
         role,
         room,
         clientId: tabClientId(),
+        getAuthToken,
         signalUrl: backendWebSocketUrl(),
         iceServers: iceServersFrom(settings.network),
         onState: setLink,
@@ -689,6 +753,8 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       backendOnline,
       warning,
       recordSession,
+      getSessionLog,
+      startNewSession,
     }),
     [
       profile,
@@ -734,6 +800,8 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       backendOnline,
       warning,
       recordSession,
+      getSessionLog,
+      startNewSession,
     ],
   );
 

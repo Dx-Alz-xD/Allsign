@@ -3,14 +3,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { MotionConfig } from 'framer-motion';
 import type { ProfileMode, SystemState } from '@shared/types';
+import { AccountLoading, SignInScreen } from '@/components/account/SignInScreen';
 import { EmergencyAlertDialog, type EmergencyDelivery } from '@/components/modals/EmergencyAlertDialog';
 import { ModalProvider, useModals } from '@/components/modals/ModalProvider';
+import { AccountProvider, useAccount } from '@/components/providers/AccountProvider';
 import { SessionProvider, useSession } from '@/components/providers/SessionProvider';
 import { SettingsProvider } from '@/components/providers/SettingsProvider';
 import { Navbar } from '@/components/ui/Navbar';
 import { SessionBar } from '@/components/ui/SessionBar';
 import { Sidebar } from '@/components/ui/Sidebar';
 import { AccessibilityView } from '@/components/views/AccessibilityView';
+import { AccountView } from '@/components/views/AccountView';
 import { AnalyticsView } from '@/components/views/AnalyticsView';
 import { CaregiverView } from '@/components/views/CaregiverView';
 import { HomeView } from '@/components/views/HomeView';
@@ -25,10 +28,20 @@ export default function DashboardPage() {
   return (
     <SettingsProvider>
       <ModalProvider>
-        <DashboardShell />
+        <AccountProvider>
+          <AccountGate />
+        </AccountProvider>
       </ModalProvider>
     </SettingsProvider>
   );
+}
+
+/** Voicematics runs as a signed-in account; a different account gets a fresh session (workers, links, state). */
+function AccountGate() {
+  const { status, account, email } = useAccount();
+  if (status === 'loading') return <AccountLoading />;
+  if (status === 'signed-out') return <SignInScreen />;
+  return <DashboardShell key={account?.user.id ?? email ?? 'account'} />;
 }
 
 function DashboardShell() {
@@ -131,6 +144,7 @@ function ShellContent({ profile, onProfileChange, muted, onMutedChange }: ShellC
         muted={muted}
         onToggleMute={toggleMute}
         onOpenSettings={() => openModal({ kind: 'settings' })}
+        onOpenAccount={() => selectView('account')}
       />
       <EmergencyAlertDialog open={emergencyOpen} onClose={closeEmergency} delivery={emergencyDelivery} />
 
@@ -148,10 +162,11 @@ function ShellContent({ profile, onProfileChange, muted, onMutedChange }: ShellC
 
             <SessionBar className="mb-6" />
 
-            {view === 'home' && <HomeView state={systemState} />}
+            {view === 'home' && <HomeView state={systemState} onProfileChange={onProfileChange} onSelectView={selectView} />}
             {view === 'analytics' && <AnalyticsView />}
             {view === 'triggers' && <TriggersView />}
             {view === 'caregiver' && <CaregiverView />}
+            {view === 'account' && <AccountView />}
             {view === 'settings' && <SettingsView />}
             {view === 'accessibility' && <AccessibilityView />}
           </div>

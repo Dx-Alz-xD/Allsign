@@ -18,7 +18,7 @@ interface CheckoutModalProps {
 type Step = 'account' | 'payment' | 'processing' | 'success';
 
 const PROCESSING_MIN_MS = 1800;
-const PROCESSING_LINES = ['Processing zero-cloud authorization...', 'Issuing licence key...', 'Binding plan to your account...'];
+const PROCESSING_LINES = ['Authorizing payment...', 'Issuing licence key...', 'Binding plan to your account...'];
 
 function formatCardNumber(raw: string): string {
   const digits = raw.replace(/\D/g, '').slice(0, 19);
@@ -121,7 +121,7 @@ export function CheckoutModal({ plan, onClose, onDownload }: CheckoutModalProps)
       );
       const remaining = PROCESSING_MIN_MS - (performance.now() - started);
       if (remaining > 0) await new Promise((resolve) => window.setTimeout(resolve, remaining));
-      session.applyAccount({ user: response.user, license: response.license }, response.subscription);
+      session.applyAccount({ user: response.user, license: response.license, entitlements: response.entitlements }, response.subscription);
       setResult(response);
       setStep('success');
     } catch (failure) {

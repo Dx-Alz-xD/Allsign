@@ -2,7 +2,9 @@
 
 import { useEffect, useRef } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
+import { ProBadge } from '@/components/account/PlanGate';
 import { useModals } from '@/components/modals/ModalProvider';
+import { useAccount } from '@/components/providers/AccountProvider';
 import { NAV_ITEMS, type ViewId } from '@/lib/navigation';
 import { cn } from '@/lib/cn';
 
@@ -24,6 +26,7 @@ function NavList({
   onSelect: (view: ViewId) => void;
   indicatorId: string;
 }) {
+  const { has } = useAccount();
   return (
     <ul className="flex flex-col gap-1">
       {NAV_ITEMS.map((item) => {
@@ -49,7 +52,8 @@ function NavList({
                 />
               )}
               <Icon aria-hidden className={cn('size-5 shrink-0', isActive ? 'text-neon-cyan' : 'text-dim')} />
-              {item.label}
+              <span className="min-w-0 flex-1">{item.label}</span>
+              {item.feature && !has(item.feature) && <ProBadge />}
             </button>
           </li>
         );

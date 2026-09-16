@@ -3,8 +3,10 @@
 import { useId, useState, type FormEvent } from 'react';
 import { Copy, Link2, Link2Off, Radio, Siren, TriangleAlert } from 'lucide-react';
 import type { CaregiverRole } from '@shared/types';
+import { ProBadge, UpgradeActions } from '@/components/account/PlanGate';
 import { buttonStyles } from '@/components/modals/Modal';
 import { inputStyles } from '@/components/modals/settings/controls';
+import { useAccount } from '@/components/providers/AccountProvider';
 import { useSession } from '@/components/providers/SessionProvider';
 import { PitchModeDashboard } from '@/components/PitchModeDashboard';
 import { TelemetryBar } from '@/components/TelemetryBar';
@@ -44,8 +46,12 @@ export function CaregiverView() {
     backendOnline,
   } = useSession();
   const latestTranscript = remoteTranscripts[0] ?? null;
+  const { has } = useAccount();
+  const canShare = has('caregiver_link');
   const [room, setRoom] = useState(() => generateRoomCode());
-  const [role, setRole] = useState<CaregiverRole>('speaker');
+  // Watching needs no plan, so a Free account starts on the side it can use.
+  const [role, setRole] = useState<CaregiverRole>(() => (canShare ? 'speaker' : 'caregiver'));
+  const speakerLocked = role === 'speaker' && !canShare;
   const [emergencyNote, setEmergencyNote] = useState('');
   const ids = { room: useId(), role: useId() };
   const active = link !== null && link.status !== 'closed';
@@ -53,7 +59,7 @@ export function CaregiverView() {
   const connect = (event: FormEvent) => {
     event.preventDefault();
     const code = room.trim().toUpperCase();
-    if (!/^[A-Z0-9-]{4,64}$/.test(code)) return;
+    if (!/^[A-Z0-9-]{4,64}$/.test(code) || speakerLocked) return;
     setRoom(code);
     connectCaregiver(code, role);
   };
@@ -85,7 +91,7 @@ export function CaregiverView() {
               This device is the
             </label>
             <select id={ids.role} value={role} onChange={(event) => setRole(event.target.value as CaregiverRole)} disabled={active} className={inputStyles}>
-              <option value="speaker">speaker</option>
+              <option value="speaker">{canShare ? 'speaker' : 'speaker (Pro)'}</option>
               <option value="caregiver">caregiver</option>
             </select>
           </div>
@@ -95,12 +101,26 @@ export function CaregiverView() {
               Disconnect
             </button>
           ) : (
-            <button type="submit" disabled={backendOnline === false} className={buttonStyles.primary}>
+            <button type="submit" disabled={backendOnline === false || speakerLocked} className={buttonStyles.primary}>
               <Link2 aria-hidden className="size-4" />
               Connect
             </button>
           )}
         </form>
+        {speakerLocked && (
+          <div className="mt-4 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+            <p className="flex flex-wrap items-center gap-2 font-semibold text-ink">
+              Sharing as the speaker is part of Voicematics Pro <ProBadge />
+            </p>
+            <p className="mt-1 max-w-prose text-sm text-mist">
+              Anyone can watch as the caregiver for free. To stream your own voice measurements, sentences and emergency alerts
+              to a caregiver, upgrade your plan.
+            </p>
+            <div className="mt-3">
+              <UpgradeActions compact />
+            </div>
+          </div>
+        )}
         <p className="mt-3 flex items-center gap-2 text-sm text-mist">
           <Radio aria-hidden className={cn('size-4', link?.status === 'connected' ? 'text-neon-cyan' : '')} />
           {link ? STATUS_TEXT[link.status] : 'Not connected'}
@@ -110,7 +130,7 @@ export function CaregiverView() {
         </p>
       </section>
 
-      {role === 'speaker' && (
+      {role === 'speaker' && canShare && (
         <section aria-label="Sharing" className="space-y-4">
           <TelemetryBar source={telemetry} peer={peer} />
           <div className="flex flex-wrap items-center gap-3">

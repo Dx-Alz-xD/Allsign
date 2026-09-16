@@ -685,6 +685,90 @@ describe('trigger.worker spectral matcher (port of acoustic_matcher.py)', () => 
 });
 
 // ---------------------------------------------------------------------------
+// trigger.worker.ts account store and plan limit
+
+describe('trigger.worker account store', () => {
+  const spectrum = (seed: number) =>
+    Array.from({ length: 128 }, (_, i) => 10 ** ((Math.sin(i / 7 + seed) * 20 + Math.cos(i / 3 + seed * 2) * 8 - 60 - i / 8) / 10));
+  const stored = [0.3, 1.7].map((seed, index) => ({
+    id: `t${index + 1}`,
+    name: `Trigger ${index + 1}`,
+    spectralFingerprint: spectrum(seed),
+    mappedPhrase: `phrase ${index + 1}`,
+    targetAction: 'TTS_SPOKEN',
+    threshold: 0.85,
+  }));
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  function setup() {
+    const requests: Array<{ url: string; method: string; authorization: string | null }> = [];
+    const fetch = async (url: string, init: { method?: string; headers?: Record<string, string> } = {}) => {
+      const method = init.method ?? 'GET';
+      requests.push({ url, method, authorization: init.headers?.authorization ?? null });
+      if (method === 'POST') {
+        const body = JSON.stringify({ detail: 'Unlimited triggers is part of Voicematics Pro. Upgrade your plan to use it.' });
+        return { ok: false, status: 403, text: async () => body, json: async () => JSON.parse(body) };
+      }
+      return { ok: true, status: 200, json: async () => stored, text: async () => JSON.stringify(stored) };
+    };
+    const worker = loadWorker('trigger.worker.ts', { fetch });
+    return { worker, requests };
+  }
+
+  const matchesFor = (worker: ReturnType<typeof setup>['worker'], seed: number, start: number) => {
+    for (let frame = 0; frame < 12; frame++) {
+      worker.send({ type: 'frame', bins: spectrum(seed), timestamp: start + frame * 10, volumeDb: -20 });
+    }
+    return worker
+      .drain()
+      .filter((message) => (message as { type: string }).type === 'match')
+      .map((message) => (message as { match: { id: string } }).match.id);
+  };
+
+  it('loads as the account, matches only the triggers the plan includes, and reloads for a new session', async () => {
+    const { worker, requests } = setup();
+    worker.send({ type: 'init', config: { apiBaseUrl: 'http://api.test', authToken: 'token-1', triggerLimit: 1 } });
+    await settle();
+    const ready = worker.drain()[0] as { type: string; triggers: unknown[] };
+    expect(ready.type).toBe('ready');
+    expect(ready.triggers).toHaveLength(2);
+    expect(requests[0]).toEqual({ url: 'http://api.test/api/triggers?limit=500', method: 'GET', authorization: 'Bearer token-1' });
+
+    expect(matchesFor(worker, 0.3, 0)).toEqual(['t1']);
+    // The second trigger is over the Free limit: listed, never matched.
+    expect(matchesFor(worker, 1.7, 1000)).not.toContain('t2');
+
+    worker.send({ type: 'account', authToken: 'token-1', triggerLimit: null });
+    await settle();
+    expect(requests).toHaveLength(1); // same session: no reload
+    expect(matchesFor(worker, 1.7, 2000)).toEqual(['t2']);
+
+    worker.send({ type: 'account', authToken: 'token-2', triggerLimit: null });
+    await settle();
+    expect(requests.at(-1)?.authorization).toBe('Bearer token-2');
+    expect(worker.drain().some((message) => (message as { type: string }).type === 'triggers')).toBe(true);
+
+    // A re-confirmed account fetches its triggers again, in case another computer saved one.
+    const before = requests.length;
+    worker.send({ type: 'account', authToken: 'token-2', triggerLimit: null, reload: true });
+    await settle();
+    expect(requests).toHaveLength(before + 1);
+  });
+
+  it('reports a refused save as a store error with the backend message, not a pipeline failure', async () => {
+    const { worker } = setup();
+    worker.send({ type: 'init', config: { apiBaseUrl: 'http://api.test', authToken: 'token-1', triggerLimit: 1 } });
+    await settle();
+    worker.drain();
+    worker.send({ type: 'enroll', profile: { ...stored[0], id: 'new', name: 'Click' } });
+    await settle();
+    expect(worker.drain()).toEqual([
+      { type: 'storeError', message: 'Unlimited triggers is part of Voicematics Pro. Upgrade your plan to use it.' },
+    ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // audio.worker.ts -> cadence.worker.ts (FluencyMetrics)
 
 describe('cadence.worker (via audio.worker)', () => {

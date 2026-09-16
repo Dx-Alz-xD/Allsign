@@ -195,6 +195,8 @@ export interface AudioPipeline {
   cancelTriggerCapture: () => void;
   removeTrigger: (id: string) => void;
   setTriggerThreshold: (id: string, threshold: number) => void;
+  /** The session token trigger.worker saves with, and how many triggers the plan matches (null = all). */
+  setTriggerAccount: (authToken: string, triggerLimit: number | null, reload?: boolean) => void;
   reset: () => void;
 }
 
@@ -513,6 +515,9 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
           case 'triggers':
             if (aliveRef.current) setTriggers(message.triggers);
             break;
+          case 'storeError':
+            onWarningRef.current?.(message.message);
+            break;
           case 'match':
             snapshot.lastTriggerId = message.match.id;
             snapshot.lastTriggerAt = message.match.timestamp;
@@ -829,6 +834,10 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
     (id: string, threshold: number) => postTrigger({ type: 'setThreshold', id, threshold }),
     [postTrigger],
   );
+  const setTriggerAccount = useCallback(
+    (authToken: string, triggerLimit: number | null, reload = false) => postTrigger({ type: 'account', authToken, triggerLimit, reload }),
+    [postTrigger],
+  );
 
   const reset = useCallback(() => {
     const snapshot = snapshotRef.current;
@@ -876,6 +885,7 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
     cancelTriggerCapture,
     removeTrigger,
     setTriggerThreshold,
+    setTriggerAccount,
     reset,
   };
 }

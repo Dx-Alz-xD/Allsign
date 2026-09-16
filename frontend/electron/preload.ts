@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webFrame, type IpcRendererEvent } from 'electron';
 import type {
+  AccountStorageStatus,
   DirectPasteResult,
   DirectPasteStatus,
   HotkeyAction,
@@ -59,6 +60,13 @@ const bridge: OmniVoiceBridge = {
         (value): value is HotkeyStatus => typeof value === 'object' && value !== null && 'registrations' in value,
         listener,
       ),
+  },
+  account: {
+    getHardwareId: () => invoke<string>('account:hardware-id'),
+    load: () => invoke<string | null>('account:load'),
+    save: (record) => invoke<AccountStorageStatus>('account:save', record),
+    clear: () => invoke<void>('account:clear'),
+    getStorageStatus: () => invoke<AccountStorageStatus>('account:storage'),
   },
   display: {
     setZoomFactor: (factor) => {

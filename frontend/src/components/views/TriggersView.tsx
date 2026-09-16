@@ -3,8 +3,10 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { Mic, Trash2, Zap } from 'lucide-react';
 import type { AcousticTriggerProfile } from '@shared/types';
+import { UpgradeActions } from '@/components/account/PlanGate';
 import { buttonStyles } from '@/components/modals/Modal';
 import { inputStyles } from '@/components/modals/settings/controls';
+import { useAccount } from '@/components/providers/AccountProvider';
 import { useSession } from '@/components/providers/SessionProvider';
 import { VocalAssistPanel } from '@/components/profiles/VocalAssistPanel';
 import { EmptyState } from '@/components/views/EmptyState';
@@ -22,6 +24,9 @@ const CAPTURE_MS = 600;
 
 export function TriggersView() {
   const { pipeline, live, backendOnline } = useSession();
+  const { entitlements, offline } = useAccount();
+  const limit = entitlements.triggerLimit;
+  const atLimit = limit !== null && pipeline.triggers.length >= limit;
   const { triggers, captureTrigger, cancelTriggerCapture, removeTrigger, setTriggerThreshold } = pipeline;
   const [name, setName] = useState('');
   const [phrase, setPhrase] = useState('');
@@ -43,7 +48,7 @@ export function TriggersView() {
 
   const startCapture = (event: FormEvent) => {
     event.preventDefault();
-    if (!name.trim() || !phrase.trim() || !live) return;
+    if (!name.trim() || !phrase.trim() || !live || atLimit) return;
     setCountdown(3);
     const tick = (remaining: number) => {
       if (remaining === 0) {
@@ -130,14 +135,25 @@ export function TriggersView() {
             ) : countdown !== null ? (
               <span className="font-display text-lg font-semibold text-ink">Get ready: {countdown}</span>
             ) : (
-              <button type="submit" disabled={!live || !name.trim() || !phrase.trim()} className={buttonStyles.primary}>
+              <button type="submit" disabled={!live || atLimit || !name.trim() || !phrase.trim()} className={buttonStyles.primary}>
                 <Zap aria-hidden className="size-4" />
                 Record the sound
               </button>
             )}
             {!live && <span className="text-sm text-mist">Start the microphone first.</span>}
-            {backendOnline === false && <span className="text-sm text-warn">Backend unreachable: new triggers stay on this device only.</span>}
+            {(backendOnline === false || offline) && (
+              <span className="text-sm text-warn">Voicematics is offline: new triggers can be saved once it reconnects.</span>
+            )}
           </div>
+          {atLimit && (
+            <div className="sm:col-span-2">
+              <p className="mb-3 text-ink">
+                Your plan includes {limit} trigger{limit === 1 ? '' : 's'}. Delete one to record a different sound, or upgrade to
+                Voicematics Pro for unlimited triggers.
+              </p>
+              <UpgradeActions compact />
+            </div>
+          )}
         </form>
       </section>
 
@@ -148,10 +164,15 @@ export function TriggersView() {
       ) : (
         <section aria-label="Enrolled triggers" className="glass rounded-2xl">
           <ul className="divide-y divide-white/10">
-            {triggers.map((trigger) => (
+            {triggers.map((trigger, index) => (
               <li key={trigger.id} className="flex flex-wrap items-center gap-4 px-5 py-4">
                 <div className="min-w-0 flex-1">
-                  <p className="font-display text-lg font-semibold text-ink">{trigger.name}</p>
+                  <p className="flex flex-wrap items-center gap-2 font-display text-lg font-semibold text-ink">
+                    {trigger.name}
+                    {limit !== null && index >= limit && (
+                      <span className="font-sans text-sm font-bold text-warn">Paused: over your plan&apos;s trigger limit</span>
+                    )}
+                  </p>
                   <p className="text-sm text-mist">
                     {ACTIONS.find(([value]) => value === trigger.targetAction)?.[1]}: &ldquo;{trigger.mappedPhrase}&rdquo;
                   </p>

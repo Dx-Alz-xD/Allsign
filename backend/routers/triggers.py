@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 import acoustic_matcher as am
 from database import get_db
 from models import AcousticTrigger
-from ownership import Owner, get_owned_or_404, owned
+from ownership import CurrentAccount, Owner, get_owned_or_404, owned, plan_required
 from schemas import (
     AcousticMatchCandidate,
     AcousticMatchRequest,
@@ -117,22 +117,31 @@ def list_triggers(
 
 
 @router.post("", response_model=AcousticTriggerOut, status_code=status.HTTP_201_CREATED)
-def create_trigger(payload: AcousticTriggerCreate, db: DbSession, owner: Owner) -> AcousticTriggerOut:
-    trigger = AcousticTrigger(**payload.model_dump(), userId=owner)
+def create_trigger(payload: AcousticTriggerCreate, db: DbSession, account: CurrentAccount) -> AcousticTriggerOut:
+    if account.trigger_limit is not None:
+        count = db.scalar(owned(select(func.count(AcousticTrigger.id)), AcousticTrigger, account.id))
+        if count >= account.trigger_limit:
+            raise plan_required("unlimited_triggers")
+    trigger = AcousticTrigger(**payload.model_dump(), userId=account.id)
     db.add(trigger)
     db.commit()
     return AcousticTriggerOut.model_validate(trigger)
 
 
 @router.post("/match", response_model=AcousticMatchResponse)
-def match_trigger(payload: AcousticMatchRequest, db: DbSession, owner: Owner) -> AcousticMatchResponse:
+def match_trigger(payload: AcousticMatchRequest, db: DbSession, account: CurrentAccount) -> AcousticMatchResponse:
     """Rank stored triggers against one 128-bin power spectrum (acoustic_matcher FFT peak matching).
 
     score blends envelope-shape cosine similarity, in-band energy and peak overlap; distance = 1 - score.
     Only the best candidate can fire, and only when its score reaches that trigger's own threshold.
+    An account over its plan's trigger limit (a lapsed Pro plan) keeps its triggers, but only the oldest
+    ones up to the limit are matched.
     """
     start = time.perf_counter()
-    query, ranked = am.rank(payload.spectralFingerprint, profile_cache.templates(db, owner), payload.topK)
+    templates = profile_cache.templates(db, account.id)
+    if account.trigger_limit is not None:
+        templates = templates[: account.trigger_limit]
+    query, ranked = am.rank(payload.spectralFingerprint, templates, payload.topK)
     ids = [entry.template.trigger_id for entry in ranked]
     details = {
         row.id: row

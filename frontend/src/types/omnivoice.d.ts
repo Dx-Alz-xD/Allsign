@@ -1,6 +1,7 @@
 import type { OmniVoiceBridge } from '../../electron/ipc';
 
 export type {
+  AccountStorageStatus,
   DirectPasteResult,
   DirectPasteState,
   DirectPasteStatus,

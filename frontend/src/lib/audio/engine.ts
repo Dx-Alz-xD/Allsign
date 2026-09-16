@@ -238,7 +238,7 @@ export class AudioEngine {
 function describeError(error: unknown): string {
   const name = error instanceof DOMException ? error.name : '';
   if (name === 'NotAllowedError' || name === 'SecurityError') {
-    return 'Microphone access is blocked. Allow OmniVoice OS in your system privacy settings, then try again.';
+    return 'Microphone access is blocked. Allow Voicematics in your system privacy settings, then try again.';
   }
   if (name === 'NotFoundError' || name === 'OverconstrainedError') {
     return 'That microphone is not available. Choose another one in Settings.';

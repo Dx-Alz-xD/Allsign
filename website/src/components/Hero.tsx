@@ -7,7 +7,7 @@ import { WaveformGrid } from '@/components/WaveformGrid';
 
 const BADGES = [
   { icon: Timer, text: 'Sub-15 ms analysis' },
-  { icon: ShieldCheck, text: 'Nothing leaves the device' },
+  { icon: ShieldCheck, text: 'Audio never leaves your computer' },
   { icon: Cpu, text: 'DSP, LPC, FFT and a formal grammar' },
 ];
 
@@ -54,7 +54,7 @@ export function Hero({ onDownload }: HeroProps) {
     return () => scope.revert();
   }, []);
 
-  const headline = 'Sub-15ms Assistive Speech Realignment. 100% On-Device.'.split(' ');
+  const headline = 'Sub-15ms Assistive Speech Realignment. Audio Stays On-Device.'.split(' ');
 
   return (
     <section ref={root} id="top" className="relative isolate overflow-hidden pb-24 pt-28 sm:pt-36">
@@ -70,7 +70,7 @@ export function Hero({ onDownload }: HeroProps) {
           ))}
         </h1>
         <p className="hero-sub mt-6 max-w-2xl text-lg text-smoke opacity-0 sm:text-xl">
-          Zero Cloud Dependencies. Zero AI Hallucinations. Direct OS Integration.
+          No Audio Uploads. No AI in the Speech Path. Direct OS Integration.
         </p>
         <ul className="mt-8 flex flex-wrap gap-2">
           {BADGES.map(({ icon: Icon, text }) => (

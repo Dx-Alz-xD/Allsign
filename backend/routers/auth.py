@@ -3,6 +3,10 @@
 - POST /api/auth/signup   create an account with a free licence key, returns a session token
 - POST /api/auth/login    check the password, returns a session token and the licence status
 - GET  /api/auth/me       the signed-in account (Authorization: Bearer <token>)
+- POST /api/auth/me/delete  signed in + password: erase the account and everything saved with it
+- POST /api/auth/devices          signed in: remember this computer, returns a device token once
+- POST /api/auth/devices/session  device token + hardware id -> a fresh session token
+- POST /api/auth/devices/revoke   sign this computer out (the device token proves possession)
 - POST /api/license/verify  the desktop app's startup check of email + licence key, bound to one machine
 - POST /api/license/deactivate  signed in: unbind the key from its machine so another one can activate it
 
@@ -14,20 +18,28 @@ both. Licence verification answers "invalid" the same way for an unknown email, 
 account's key.
 """
 
+import hashlib
 import hmac
+import secrets
 from typing import Annotated
 
 import jwt
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from models import utcnow
+from database import get_db
+from models import User, utcnow
 from schemas import (
+    AccountDeleteRequest,
     AccountResponse,
     AuthSessionResponse,
+    DeviceRegisterRequest,
+    DeviceRegisterResponse,
+    DeviceRevokeRequest,
+    DeviceSessionRequest,
     Entitlements,
     LicenseDeactivateResponse,
     LicenseInfo,
@@ -39,7 +51,7 @@ from schemas import (
 )
 from web_auth.database import get_web_db
 from web_auth.licenses import generate_license_key, hardware_fingerprint, normalise_license_key
-from web_auth.models import LicenseKey, WebUser
+from web_auth.models import DeviceSession, LicenseKey, WebUser
 from web_auth.passwords import hash_password, needs_rehash, spend_verification, verify_password
 from web_auth.plans import features_for, plan_expires_at, settle_plan, trigger_limit_for
 from web_auth.throttle import LoginThrottle
@@ -54,6 +66,9 @@ login_throttle = LoginThrottle()
 
 SIGNUP_KEY_ATTEMPTS = 5
 INVALID_CREDENTIALS = "Invalid email or password."
+DEVICE_SIGNED_OUT = "This computer is signed out. Sign in again."
+# Remembered computers per account; registering one more revokes the least recently used.
+MAX_DEVICES = 10
 
 
 def normalise_email(email: str) -> str:
@@ -179,6 +194,95 @@ def signed_in_user(
 def me(user: Annotated[WebUser, Depends(signed_in_user)], db: WebDb) -> AccountResponse:
     granted = entitlements(db, user)  # first: settling a lapsed plan may change the user's tier
     return AccountResponse(user=WebUserOut.model_validate(user), license=license_info(user, current_license(db, user)), entitlements=granted)
+
+
+@router.post("/me/delete", status_code=status.HTTP_204_NO_CONTENT)
+def delete_account(
+    payload: AccountDeleteRequest,
+    user: Annotated[WebUser, Depends(signed_in_user)],
+    db: WebDb,
+    app_db: Annotated[Session, Depends(get_db)],
+) -> Response:
+    """Erases the account, its licences, subscriptions and remembered computers, and every trigger, preset, session
+    and phoneme target saved under it. A wrong password answers 403, not 401, because the session itself is fine."""
+    wait = login_throttle.retry_after(user.email)
+    if wait:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Too many failed attempts. Try again later.",
+            headers={"Retry-After": str(wait)},
+        )
+    if not verify_password(payload.password, user.passwordHash):
+        login_throttle.record_failure(user.email)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="That password is not correct.")
+    login_throttle.reset(user.email)
+    # App data first: if this fails the account still exists and the request can be repeated.
+    app_db.execute(delete(User).where(User.id == user.id))  # owned rows go with it (ON DELETE CASCADE)
+    app_db.commit()
+    db.delete(user)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+def device_secret_hash(token: str) -> str:
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def live_device(db: Session, token: str) -> DeviceSession | None:
+    return db.scalar(select(DeviceSession).where(DeviceSession.secretHash == device_secret_hash(token), DeviceSession.revokedAt.is_(None)))
+
+
+@router.post("/devices", response_model=DeviceRegisterResponse, status_code=status.HTTP_201_CREATED)
+def register_device(payload: DeviceRegisterRequest, user: Annotated[WebUser, Depends(signed_in_user)], db: WebDb) -> DeviceRegisterResponse:
+    now = utcnow()
+    active = list(
+        db.scalars(
+            select(DeviceSession)
+            .where(DeviceSession.userId == user.id, DeviceSession.revokedAt.is_(None))
+            .order_by(DeviceSession.lastUsedAt.desc())
+        )
+    )
+    for stale in active[MAX_DEVICES - 1 :]:
+        stale.revokedAt = now
+    token = secrets.token_urlsafe(32)
+    device = DeviceSession(
+        userId=user.id,
+        secretHash=device_secret_hash(token),
+        hardwareFingerprint=hardware_fingerprint(payload.hardwareId),
+        label=payload.label,
+        createdAt=now,
+        lastUsedAt=now,
+    )
+    db.add(device)
+    db.commit()
+    return DeviceRegisterResponse(deviceId=device.id, deviceToken=token)
+
+
+@router.post("/devices/session", response_model=AuthSessionResponse)
+def device_session(payload: DeviceSessionRequest, db: WebDb) -> AuthSessionResponse:
+    """Every failure answers the same 401: unknown or revoked token, another machine, a disabled account."""
+    device = live_device(db, payload.deviceToken)
+    user = db.get(WebUser, device.userId) if device is not None else None
+    if (
+        device is None
+        or user is None
+        or not user.isActive
+        or not hmac.compare_digest(device.hardwareFingerprint, hardware_fingerprint(payload.hardwareId))
+    ):
+        raise unauthorized(DEVICE_SIGNED_OUT)
+    device.lastUsedAt = utcnow()
+    db.commit()
+    return session_response(db, user, current_license(db, user))
+
+
+@router.post("/devices/revoke", status_code=status.HTTP_204_NO_CONTENT)
+def revoke_device(payload: DeviceRevokeRequest, db: WebDb) -> Response:
+    """Idempotent, and silent about whether the token existed."""
+    device = live_device(db, payload.deviceToken)
+    if device is not None:
+        device.revokedAt = utcnow()
+        db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @license_router.post("/deactivate", response_model=LicenseDeactivateResponse)

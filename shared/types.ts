@@ -208,8 +208,10 @@ export type CaregiverMessage =
   | { type: 'transcript'; transcript: CaregiverTranscript };
 
 // Signalling relay (WebSocket /ws/signal/{room}?role=speaker|caregiver&client=<id>). The relay forwards offer,
-// answer and ice to the other role and sends the rest itself. Close codes: 4409 the role is taken by another
-// device, 4410 this device reconnected and the newer connection replaced this one.
+// answer and ice to the other role and sends the rest itself. The session token goes in the subprotocols, never the
+// URL: offer ['voicematics.signal', 'voicematics.token.<token>']. Close codes: 4401 the speaker has no valid session,
+// 4402 the speaker's plan has no caregiver_link, 4409 the role is taken by another device, 4410 this device
+// reconnected and the newer connection replaced this one.
 export type SignalMessage =
   | { type: 'joined'; room: string; role: CaregiverRole; peerPresent: boolean }
   | { type: 'peer-joined'; role: CaregiverRole }
@@ -244,10 +246,32 @@ export interface LicenseInfo {
   activatedAt: string | null;
 }
 
+// What a plan unlocks (backend/web_auth/plans.py, the single source of truth). The desktop app and the website
+// gate their UI on this list, and the backend enforces it: 403 for a feature outside the plan.
+export type Feature =
+  | 'clearvoice' // grammar reconstruction and direct paste
+  | 'aphasia' // word finder and reconstruction
+  | 'sensory' // sensory HUD
+  | 'vocal_assist' // acoustic triggers (limited on Free)
+  | 'fluency' // DAF / FSF Fluency Coach
+  | 'therapy' // vowel plane and articulation targets
+  | 'unlimited_triggers'
+  | 'caregiver_link'
+  | 'analytics' // session history and summaries
+  | 'clinical_reports'; // the report agent
+
+export interface Entitlements {
+  tier: PlanTier; // the tier the account is really on, after a lapsed subscription is settled
+  features: Feature[];
+  triggerLimit: number | null; // null = unlimited
+  expiresAt: string | null; // when a monthly or annual plan lapses; null for free and lifetime
+}
+
 // GET /api/auth/me (Authorization: Bearer <token>)
 export interface AccountResponse {
   user: WebUser;
   license: LicenseInfo | null;
+  entitlements: Entitlements;
 }
 
 // POST /api/auth/signup (201) and POST /api/auth/login
@@ -255,6 +279,28 @@ export interface AuthSessionResponse extends AccountResponse {
   token: string; // HS256 JWT
   tokenType: 'bearer';
   expiresAt: string;
+}
+
+// Remembered computers: the desktop app stays signed in without keeping the password. POST /api/auth/devices
+// (Bearer) returns a device token once; POST /api/auth/devices/session trades it, on the same machine, for a fresh
+// AuthSessionResponse; POST /api/auth/devices/revoke (204) signs the computer out.
+export interface DeviceRegisterRequest {
+  hardwareId: string; // 8 - 256 characters; only its SHA-256 is stored
+  label?: string; // up to 80 characters, e.g. "Linux desktop"
+}
+
+export interface DeviceRegisterResponse {
+  deviceId: string;
+  deviceToken: string;
+}
+
+export interface DeviceSessionRequest {
+  deviceToken: string;
+  hardwareId: string;
+}
+
+export interface DeviceRevokeRequest {
+  deviceToken: string;
 }
 
 // POST /api/license/verify, called by the desktop app on startup. The first call with a hardwareId binds the key
@@ -272,13 +318,31 @@ export interface LicenseVerifyResponse {
   hardwareBound: boolean;
   activatedAt: string | null;
   checkedAt: string;
+  // What the desktop app may unlock; the free feature set when the key is not valid.
+  features: Feature[];
+  triggerLimit: number | null;
+  expiresAt: string | null;
+}
+
+// POST /api/auth/me/delete (Authorization: Bearer <token>), 204: erases the account, its licences, subscriptions and
+// remembered computers, and every trigger, preset, session and phoneme target saved under it. 403 = wrong password.
+export interface AccountDeleteRequest {
+  password: string;
+}
+
+// POST /api/license/deactivate (Authorization: Bearer <token>): unbinds the key from its machine.
+export interface LicenseDeactivateResponse {
+  key: string;
+  hardwareBound: boolean;
+  message: string;
 }
 
 // ---------------------------------------------------------------------------
 // Website billing (mock checkout). Mirror of the "Website billing" block in backend/schemas.py.
 
 export type BillingPeriod = 'monthly' | 'annual' | 'lifetime';
-export type SubscriptionStatus = 'active' | 'replaced' | 'cancelled';
+// 'cancelled' keeps access until currentPeriodEnd; 'expired' is a monthly or annual plan whose period ran out.
+export type SubscriptionStatus = 'active' | 'replaced' | 'cancelled' | 'expired';
 export type PlanId = 'free' | 'pro_monthly' | 'pro_annual' | 'lifetime';
 export type CardBrand = 'visa' | 'mastercard' | 'amex' | 'card';
 
@@ -327,6 +391,7 @@ export interface CheckoutResponse {
   subscription: Subscription;
   license: LicenseInfo;
   user: WebUser;
+  entitlements: Entitlements;
   downloadUrl: string; // the desktop installer, Voicematics-Setup.exe
 }
 
@@ -427,10 +492,10 @@ export interface ClinicalReport {
   recommended_daf_delay_ms: number;
 }
 
-// POST /api/agent/compile-grammar
+// POST /api/agent/compile-grammar (signed in when the backend requires accounts)
 export interface CompileGrammarRequest {
   prompt: string; // 3 - 1000 characters
-  save?: boolean; // default true: append to backend/grammars/user_custom.cfg
+  save?: boolean; // default true: append to backend/grammars/user_custom.cfg; only a local-mode backend saves
 }
 
 export interface CFGCompilerOutput {

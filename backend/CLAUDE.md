@@ -1,7 +1,7 @@
-# CLAUDE.md — OmniVoice OS Project Rules & Execution Guidelines
+# CLAUDE.md — Voicematics Project Rules & Execution Guidelines
 
 ## 1. Project Context & Non-Negotiables
-- **App:** OmniVoice OS — All-in-One Assistive Speech & Acoustic Desktop Platform.
+- **Product:** Voicematics — All-in-One Assistive Speech & Acoustic Platform, sold as a service: desktop app (`/frontend`), website (`/website`), backend (`/backend`). "OmniVoice OS" was the desktop app's codename and only survives in internal identifiers (`app://omnivoice`, `window.omnivoice`, `omnivoice.db`, `omnivoice:` storage keys); never show it to users.
 - **Performance Target:** Sub-15ms deterministic processing latency.
 - **Strict Compliance Guardrails:** 
   - ZERO Generative AI, Predictive AI, or Computer Vision model calls.
@@ -69,7 +69,8 @@ venv/Scripts/python.exe scripts/kaggle_sync.py        # fetch CMUdict + word fre
 venv/Scripts/python.exe scripts/evaluate_benchmarks.py  # regenerate EVALUATION_REPORT.md
 ```
 - Run the API as a single worker: trigger profiles, signalling rooms and the login throttle are held in process memory.
-- Voicematics accounts live in `data/web_users.db` (`web_auth/`), separate from `omnivoice.db`; never log passwords, hashes, tokens or licence keys.
+- Voicematics accounts live in `data/web_users.db` (`web_auth/`), separate from `omnivoice.db`; never log passwords, hashes, tokens, device tokens or licence keys.
+- `REQUIRE_ACCOUNT` (default `true`) enforces sign-in and plans (`ownership.py`, `web_auth/plans.py`); `tests/conftest.py` turns it off so feature tests run in local mode, and `tests/test_saas.py` turns it on to test enforcement.
 - `kaggle_sync.py` needs `KAGGLE_USERNAME` / `KAGGLE_KEY` in `backend/.env`; `--skip-download` re-seeds from `data/raw`.
 
 ---
@@ -79,22 +80,25 @@ venv/Scripts/python.exe scripts/evaluate_benchmarks.py  # regenerate EVALUATION_
 | --- | --- | --- |
 | `GET /health`, `GET /health/live` | health report | SessionProvider backend poll |
 | `POST /api/grammar/translate` | `GrammarRequest` -> `GrammarResponse` | reconstruction panels |
-| `GET/POST /api/triggers`, `GET/PUT/PATCH/DELETE /api/triggers/{id}` | `AcousticTriggerProfile`, `AcousticTriggerUpdate` | TriggersView, trigger.worker |
+| `GET/POST /api/triggers`, `GET/PUT/PATCH/DELETE /api/triggers/{id}` | `AcousticTriggerProfile`, `AcousticTriggerUpdate` (account; create 403 at the plan's trigger limit) | TriggersView, trigger.worker |
 | `POST /api/triggers/match` | `AcousticMatchRequest` -> `AcousticMatchResponse` | trigger.worker fallback |
-| `GET/POST /api/presets`, `GET/PUT/DELETE /api/presets/{id}` | `ProfilePresetInput` -> `ProfilePreset` | FluencyPanel |
-| `GET/POST /api/sessions`, `GET /api/sessions/summary`, `GET/DELETE /api/sessions/{id}` | `SessionAnalyticsInput` -> `SessionAnalytics`, `SessionSummary` | AnalyticsView, SessionProvider |
-| `GET/POST /api/phonemes/targets`, `DELETE /api/phonemes/targets/{id}` | `PhonemeTargetInput` -> `PhonemeTarget` | TherapyPanel |
+| `GET/POST /api/presets`, `GET/PUT/DELETE /api/presets/{id}` | `ProfilePresetInput` -> `ProfilePreset` (account; saving needs the profile's feature) | FluencyPanel |
+| `GET/POST /api/sessions`, `GET /api/sessions/summary`, `GET/DELETE /api/sessions/{id}` | `SessionAnalyticsInput` -> `SessionAnalytics`, `SessionSummary` (Pro: `analytics`) | AnalyticsView, SessionProvider |
+| `GET/POST /api/phonemes/targets`, `DELETE /api/phonemes/targets/{id}` | `PhonemeTargetInput` -> `PhonemeTarget` (Pro: `therapy`) | TherapyPanel |
 | `GET /api/phonemes/lookup?prefix=W+AO&limit=10` | -> `PhonemeLookupResponse` | AphasiaPanel |
-| `WS /ws/signal/{room}?role=speaker\|caregiver&client=<id>` | `SignalMessage` (close 4409 = role taken, 4410 = replaced by the same device) | caregiverLink.ts |
-| `POST /api/auth/signup`, `POST /api/auth/login` | `AuthCredentials` -> `AuthSessionResponse` | Voicematics website |
-| `GET /api/auth/me` (Bearer token) | -> `AccountResponse` | Voicematics website |
-| `POST /api/license/verify` | `LicenseVerifyRequest` -> `LicenseVerifyResponse` | desktop app startup (client ready, not wired) |
+| `WS /ws/signal/{room}?role=speaker\|caregiver&client=<id>` | `SignalMessage`; token as subprotocol `voicematics.token.<token>` (close 4401 = speaker not signed in, 4402 = plan without `caregiver_link`, 4409 = role taken, 4410 = replaced by the same device) | caregiverLink.ts |
+| `POST /api/auth/signup`, `POST /api/auth/login` | `AuthCredentials` -> `AuthSessionResponse` | website, desktop SignInScreen |
+| `GET /api/auth/me` (Bearer token) | -> `AccountResponse` (with `entitlements`) | website, desktop AccountProvider |
+| `POST /api/auth/me/delete` (Bearer token) | `AccountDeleteRequest` -> 204 (403 = wrong password) | desktop AccountView |
+| `POST /api/auth/devices` (Bearer), `POST /api/auth/devices/session`, `POST /api/auth/devices/revoke` | `DeviceRegisterRequest` -> `DeviceRegisterResponse`, `DeviceSessionRequest` -> `AuthSessionResponse`, `DeviceRevokeRequest` -> 204 | desktop AccountProvider |
+| `POST /api/license/verify` | `LicenseVerifyRequest` -> `LicenseVerifyResponse` | desktop AccountProvider (binds the licence to the machine) |
+| `POST /api/license/deactivate` (Bearer token) | -> `LicenseDeactivateResponse` | desktop AccountView |
 | `GET /api/billing/plans` | -> `PricingPlan[]` | website pricing matrix |
 | `POST /api/billing/checkout`, `GET /api/billing/subscription` (Bearer token) | `CheckoutRequest` -> `CheckoutResponse`, `Subscription` | website mock checkout, dashboard overlay |
 | `GET /api/agent/status` | -> `AgentStatus` | website assistant widget |
 | `POST /api/agent/chat` | `ChatRequest` -> `ChatResponse` | website `AgentAssistant.tsx` |
-| `POST /api/agent/generate-report` | `SessionLog` -> `ClinicalReport` | clinician report (no UI yet) |
-| `POST /api/agent/compile-grammar` | `CompileGrammarRequest` -> `CompiledGrammar` | grammar authoring (no UI yet) |
+| `POST /api/agent/generate-report` | `SessionLog` -> `ClinicalReport` (Pro: `clinical_reports`) | desktop AnalyticsView |
+| `POST /api/agent/compile-grammar` | `CompileGrammarRequest` -> `CompiledGrammar` (account; only local mode saves) | grammar authoring (no UI yet) |
 
 - Change a contract in both files in the same commit; the desktop client is `frontend/src/lib/api/client.ts`, the website client is `website/src/lib/api.ts`.
 - `frontend/src/workers/trigger.worker.ts` ports `acoustic_matcher.py`; `tests/test_acoustic_matcher.py` and `src/workers/__tests__/dsp.test.ts` pin the same reference values.

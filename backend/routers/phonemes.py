@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import CustomPhonemeTarget, Phoneme, PhonemeTrieNode, Pronunciation
-from ownership import Owner, get_owned_or_404, owned
+from ownership import Owner, get_owned_or_404, owned, require_feature
 from schemas import (
     PhonemeLookupBranch,
     PhonemeLookupResponse,
@@ -21,6 +21,8 @@ router = APIRouter(prefix="/api/phonemes", tags=["phonemes"])
 DbSession = Annotated[Session, Depends(get_db)]
 MAX_PREFIX_PHONEMES = 32
 PREFIX_SEPARATOR = re.compile(r"[\s,]+")
+# Custom articulation targets belong to Therapy Mode; the word-finding lookup stays open to everyone.
+THERAPY = [require_feature("therapy")]
 ARPABET_SYMBOL = re.compile(r"[A-Z]{1,3}")
 
 
@@ -46,14 +48,14 @@ def normalise_prefix(prefix: str, inventory: set[str]) -> list[str]:
     return symbols
 
 
-@router.get("/targets", response_model=list[PhonemeTargetOut])
+@router.get("/targets", response_model=list[PhonemeTargetOut], dependencies=THERAPY)
 def list_targets(db: DbSession, owner: Owner) -> list[PhonemeTargetOut]:
     query = owned(select(CustomPhonemeTarget), CustomPhonemeTarget, owner)
     targets = db.scalars(query.order_by(CustomPhonemeTarget.createdAt, CustomPhonemeTarget.id))
     return [PhonemeTargetOut.model_validate(target) for target in targets]
 
 
-@router.post("/targets", response_model=PhonemeTargetOut, status_code=status.HTTP_201_CREATED)
+@router.post("/targets", response_model=PhonemeTargetOut, status_code=status.HTTP_201_CREATED, dependencies=THERAPY)
 def create_target(payload: PhonemeTargetInput, db: DbSession, owner: Owner) -> PhonemeTargetOut:
     target = CustomPhonemeTarget(**payload.model_dump(), userId=owner)
     db.add(target)
@@ -61,7 +63,7 @@ def create_target(payload: PhonemeTargetInput, db: DbSession, owner: Owner) -> P
     return PhonemeTargetOut.model_validate(target)
 
 
-@router.delete("/targets/{target_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/targets/{target_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=THERAPY)
 def delete_target(target_id: str, db: DbSession, owner: Owner) -> Response:
     db.delete(get_target_or_404(db, target_id, owner))
     db.commit()

@@ -67,19 +67,19 @@ export function getDirectPasteStatus(): DirectPasteStatus {
   const platform = process.platform;
   const displayServer = linuxDisplayServer();
   const base = { platform, displayServer, steps: [] as string[], canRequestPermission: false };
-  const appName = app.isPackaged ? app.getName() : 'Electron (or the terminal you started OmniVoice OS from)';
+  const appName = app.isPackaged ? app.getName() : 'Electron (or the terminal you started Voicematics from)';
 
   if (platform === 'darwin' && !isMacTrusted(false)) {
     return {
       ...base,
       state: 'needs-permission',
-      title: 'Allow OmniVoice OS to type for you',
+      title: 'Allow Voicematics to type for you',
       message: 'macOS only lets apps type into other apps after you turn on Accessibility access.',
       steps: [
         'Select Open System Settings below.',
         `In Privacy & Security, open Accessibility and turn on ${appName}.`,
         'If it is already on, turn it off and on again.',
-        'Quit and reopen OmniVoice OS so macOS applies the change.',
+        'Quit and reopen Voicematics so macOS applies the change.',
       ],
       canRequestPermission: true,
     };
@@ -95,9 +95,9 @@ export function getDirectPasteStatus(): DirectPasteStatus {
         platform === 'linux'
           ? [
               'Install the X11 test extension library: libxtst on Arch, libxtst6 on Debian or Ubuntu.',
-              'Restart OmniVoice OS.',
+              'Restart Voicematics.',
             ]
-          : ['Reinstall OmniVoice OS, then restart it.'],
+          : ['Reinstall Voicematics, then restart it.'],
     };
   }
 
@@ -121,7 +121,7 @@ export function getDirectPasteStatus(): DirectPasteStatus {
       state: 'unavailable',
       title: 'No X11 display found',
       message: 'Direct paste needs an X11 or XWayland display, and the DISPLAY variable is not set.',
-      steps: ['Start OmniVoice OS from a graphical session.'],
+      steps: ['Start Voicematics from a graphical session.'],
     };
   }
 
@@ -131,7 +131,7 @@ export function getDirectPasteStatus(): DirectPasteStatus {
     title: 'Ready to type into the active app',
     message:
       platform === 'win32'
-        ? 'Apps running as administrator only accept typing when OmniVoice OS also runs as administrator.'
+        ? 'Apps running as administrator only accept typing when Voicematics also runs as administrator.'
         : 'Text goes to whichever app has keyboard focus.',
   };
 }
@@ -195,7 +195,7 @@ function parseRequest(input: unknown): DirectPasteRequest | null {
 }
 
 export interface DirectPasteContext {
-  /** OmniVoice's own window, used to avoid typing into ourselves. */
+  /** Voicematics' own window, used to avoid typing into ourselves. */
   getWindow: () => BrowserWindow | null;
 }
 
@@ -219,7 +219,7 @@ async function typeIntoFocusedApp(input: unknown, context: DirectPasteContext): 
     return {
       ok: false,
       reason: 'omnivoice-focused',
-      message: 'OmniVoice OS is the active window, so nothing was typed. Switch to the app you want to type into first.',
+      message: 'Voicematics is the active window, so nothing was typed. Switch to the app you want to type into first.',
     };
   }
 
@@ -323,7 +323,7 @@ async function pressShortcut(input: unknown, context: DirectPasteContext): Promi
   const automation = status.state === 'unavailable' ? null : loadNut();
   if (!automation) return { ok: false, reason: 'unavailable', message: status.message, status };
   if (context.getWindow()?.isFocused()) {
-    return { ok: false, reason: 'omnivoice-focused', message: 'OmniVoice OS is the active window, so the shortcut was not sent.' };
+    return { ok: false, reason: 'omnivoice-focused', message: 'Voicematics is the active window, so the shortcut was not sent.' };
   }
 
   const keys = shortcutKeys(input, automation.Key as unknown as Record<string, number>);

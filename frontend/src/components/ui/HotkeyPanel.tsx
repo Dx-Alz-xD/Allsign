@@ -67,7 +67,7 @@ export function HotkeyPanel() {
       <h2 id={headingId} className="text-xl font-semibold text-ink">
         Global shortcuts
       </h2>
-      <p className="mt-1 max-w-prose text-mist">These work from any app, even when OmniVoice OS is in the background.</p>
+      <p className="mt-1 max-w-prose text-mist">These work from any app, even when Voicematics is in the background.</p>
       {inDesktopApp && (
         <button type="button" onClick={() => openModal({ kind: 'settings', tab: 'shortcuts' })} className={`${buttonStyles.secondary} mt-4`}>
           <Keyboard aria-hidden className="size-4" />

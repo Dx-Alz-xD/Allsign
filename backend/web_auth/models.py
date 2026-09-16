@@ -74,3 +74,20 @@ class Subscription(WebBase):
     licenseKey: Mapped[str] = mapped_column("license_key", String(LICENSE_KEY_LENGTH))
 
     user: Mapped[WebUser] = relationship()
+
+
+class DeviceSession(WebBase):
+    """A desktop app that stays signed in. It trades its secret for a fresh session token whenever the short-lived
+    token runs out, so nobody retypes a password every day. Only the SHA-256 of the secret is stored, the secret
+    only works on the machine it was issued to, and signing out revokes it."""
+
+    __tablename__ = "device_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    userId: Mapped[str] = mapped_column("user_id", ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    secretHash: Mapped[str] = mapped_column("secret_hash", String(64), unique=True)
+    hardwareFingerprint: Mapped[str] = mapped_column("hardware_fingerprint", String(64))
+    label: Mapped[str] = mapped_column(String(80), default="")
+    createdAt: Mapped[datetime] = mapped_column("created_at", DateTime(timezone=True), default=utcnow)
+    lastUsedAt: Mapped[datetime] = mapped_column("last_used_at", DateTime(timezone=True), default=utcnow)
+    revokedAt: Mapped[datetime | None] = mapped_column("revoked_at", DateTime(timezone=True))

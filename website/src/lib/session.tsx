@@ -68,7 +68,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const accept = useCallback((session: AuthSessionResponse) => {
     writeStored({ token: session.token, expiresAt: session.expiresAt });
     setToken(session.token);
-    setAccount({ user: session.user, license: session.license });
+    setAccount({ user: session.user, license: session.license, entitlements: session.entitlements });
     setSubscription(null);
   }, []);
 

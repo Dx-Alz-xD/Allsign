@@ -38,6 +38,29 @@ PRO_FEATURES: tuple[Feature, ...] = FREE_FEATURES + (
 )
 PLAN_FEATURES: dict[str, tuple[Feature, ...]] = {"free": FREE_FEATURES, "pro": PRO_FEATURES, "lifetime": PRO_FEATURES}
 FREE_TRIGGER_LIMIT = 1
+# What people see when a plan does not include a feature.
+FEATURE_NAMES: dict[str, str] = {
+    "clearvoice": "ClearVoice",
+    "aphasia": "Aphasia Mode",
+    "sensory": "Sensory HUD",
+    "vocal_assist": "Vocal Assist triggers",
+    "fluency": "Fluency Coach",
+    "therapy": "Therapy Mode",
+    "unlimited_triggers": "Unlimited triggers",
+    "caregiver_link": "Caregiver Link",
+    "analytics": "Session analytics",
+    "clinical_reports": "Clinical reports",
+}
+# The feature a saved profile preset needs; Pitch Demo is for presentations and open to everyone.
+PROFILE_FEATURES: dict[str, Feature | None] = {
+    "clearvoice": "clearvoice",
+    "fluency": "fluency",
+    "vocal_assist": "vocal_assist",
+    "therapy": "therapy",
+    "aphasia": "aphasia",
+    "sensory": "sensory",
+    "pitch_demo": None,
+}
 # Subscriptions that count as paid access until their period ends.
 PAID_STATUSES = frozenset({"active", "cancelled"})
 
@@ -87,9 +110,11 @@ def plan_expires_at(subscription: Subscription | None) -> datetime | None:
 
 
 __all__ = [
+    "FEATURE_NAMES",
     "FREE_TRIGGER_LIMIT",
     "Feature",
     "PLAN_FEATURES",
+    "PROFILE_FEATURES",
     "PlanTier",
     "current_subscription",
     "features_for",

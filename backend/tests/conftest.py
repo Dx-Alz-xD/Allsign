@@ -5,6 +5,8 @@ os.environ["DATABASE_URL"] = "sqlite://"
 os.environ["WEB_AUTH_DATABASE_URL"] = "sqlite://"
 # A fixed test key, so no generated key file is written.
 os.environ["AUTH_JWT_SECRET"] = "test-signing-key-" + "0" * 32
+# The feature tests run in local mode; tests/test_saas.py turns accounts on where it checks enforcement.
+os.environ["REQUIRE_ACCOUNT"] = "false"
 
 import pytest  # noqa: E402
 

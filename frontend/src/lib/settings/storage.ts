@@ -27,7 +27,7 @@ function storedKeys(): string[] {
   }
 }
 
-/** Copies everything OmniVoice OS keeps in browser storage. Values are parsed, so editing them is safe. */
+/** Copies everything Voicematics keeps in browser storage. Values are parsed, so editing them is safe. */
 export function readStoredData(): Record<string, unknown> {
   const data: Record<string, unknown> = {};
   for (const key of storedKeys()) {
@@ -41,7 +41,7 @@ export function readStoredData(): Record<string, unknown> {
   return data;
 }
 
-/** Removes everything OmniVoice OS keeps in browser storage and returns the removed keys. */
+/** Removes everything Voicematics keeps in browser storage and returns the removed keys. */
 export function clearStoredData(): string[] {
   const keys = storedKeys();
   for (const key of keys) {

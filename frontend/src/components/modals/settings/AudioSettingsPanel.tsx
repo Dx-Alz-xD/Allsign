@@ -26,7 +26,7 @@ function describeMediaError(error: unknown): { access: Access; message: string }
     return {
       access: 'denied',
       message:
-        'Microphone access is blocked. Allow OmniVoice OS in your system privacy settings (on macOS, Privacy & Security, then Microphone), then reopen Settings.',
+        'Microphone access is blocked. Allow Voicematics in your system privacy settings (on macOS, Privacy & Security, then Microphone), then reopen Settings.',
     };
   }
   if (name === 'NotFoundError' || name === 'OverconstrainedError') {
@@ -202,7 +202,7 @@ export function AudioSettingsPanel() {
   );
 
   if (access === 'unsupported') {
-    return <p className="text-mist">This system does not let apps list audio devices, so OmniVoice OS uses the system defaults.</p>;
+    return <p className="text-mist">This system does not let apps list audio devices, so Voicematics uses the system defaults.</p>;
   }
 
   return (
@@ -212,7 +212,7 @@ export function AudioSettingsPanel() {
           <p className="max-w-prose text-ink">
             {access === 'denied'
               ? 'Microphone access is blocked, so device names are hidden.'
-              : 'Allow microphone access to see the names of your devices. OmniVoice OS only listens when you use it.'}
+              : 'Allow microphone access to see the names of your devices. Voicematics only listens when you use it.'}
           </p>
           {access === 'needs-permission' && (
             <button type="button" onClick={() => void requestAccess()} className={cn(buttonStyles.primary, 'mt-3')}>
@@ -228,7 +228,7 @@ export function AudioSettingsPanel() {
         </p>
       )}
 
-      <SettingSection title="Microphone" description="The microphone OmniVoice OS listens to for speech analysis and custom triggers.">
+      <SettingSection title="Microphone" description="The microphone Voicematics listens to for speech analysis and custom triggers.">
         <div>
           <label htmlFor={inputId} className="mb-1.5 block font-semibold text-ink">
             Input device
@@ -282,7 +282,7 @@ export function AudioSettingsPanel() {
 
       <SettingSection
         title="Speakers"
-        description="Where OmniVoice OS plays voice feedback and alert sounds. Spoken emergency phrases use your system's default output."
+        description="Where Voicematics plays voice feedback and alert sounds. Spoken emergency phrases use your system's default output."
       >
         <div>
           <label htmlFor={outputId} className="mb-1.5 block font-semibold text-ink">

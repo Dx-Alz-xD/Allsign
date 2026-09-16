@@ -40,7 +40,7 @@ export function Pricing({ onSubscribe, onCreateAccount, onOpenDashboard }: Prici
       <div className="flex flex-wrap items-end justify-between gap-6">
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.3em] text-ember">Pricing</p>
-          <h2 className="mt-3 font-display text-3xl font-bold text-bone sm:text-4xl">One licence, your machine, no cloud bill</h2>
+          <h2 className="mt-3 font-display text-3xl font-bold text-bone sm:text-4xl">Start free, upgrade when you need more</h2>
         </div>
         <div className="flex items-center gap-3 text-sm">
           <span className={annual ? 'text-smoke' : 'text-bone'}>Monthly</span>

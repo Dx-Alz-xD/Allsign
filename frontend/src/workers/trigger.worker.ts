@@ -18,8 +18,11 @@
  * above threshold and is followed by a refractory hold-off.
  *
  * Profiles live in the backend's SQLite store when `apiBaseUrl` is set (the
- * worker talks to /api/triggers directly); otherwise in IndexedDB, or in
- * memory where neither exists (tests).
+ * worker talks to /api/triggers directly, as the signed-in account); otherwise
+ * in IndexedDB, or in memory where neither exists (tests). On a plan with a
+ * trigger limit only the oldest `triggerLimit` triggers are matched, as in
+ * the backend's /api/triggers/match; the rest stay listed so they can be
+ * deleted or come back with an upgrade.
  */
 
 import type { SpectralPacket, SpectralPortMessage } from '@/workers/audio.worker';
@@ -48,6 +51,10 @@ export interface TriggerWorkerConfig {
   frameMs: number;
   /** Backend origin, e.g. http://127.0.0.1:8000. Empty = local IndexedDB store. */
   apiBaseUrl: string;
+  /** Voicematics session token sent to the backend store; empty in local mode. */
+  authToken: string;
+  /** Triggers the account's plan matches (the oldest first); null = unlimited. */
+  triggerLimit: number | null;
 }
 
 export interface TriggerMatch {
@@ -88,6 +95,8 @@ export type TriggerWorkerRequest =
   | { type: 'remove'; id: string }
   | { type: 'setThreshold'; id: string; threshold: number }
   | { type: 'list' }
+  /** The signed-in account changed its token or plan, or was re-confirmed (`reload`: fetch its triggers again). */
+  | { type: 'account'; authToken: string; triggerLimit: number | null; reload?: boolean }
   | { type: 'reset' }
   | { type: 'close' };
 
@@ -99,6 +108,8 @@ export type TriggerWorkerResponse =
   | { type: 'captureCancelled'; id: string }
   | { type: 'match'; match: TriggerMatch }
   | { type: 'scores'; timestamp: number; best: TriggerScore | null; scores: TriggerScore[] }
+  /** Saving, editing or deleting a trigger failed (offline, signed out, over the plan's limit); matching carries on. */
+  | { type: 'storeError'; message: string }
   | { type: 'error'; message: string };
 
 interface WorkerScope {
@@ -121,6 +132,8 @@ const DEFAULT_CONFIG: TriggerWorkerConfig = {
   captureTimeoutMs: 5000,
   frameMs: 10,
   apiBaseUrl: '',
+  authToken: '',
+  triggerLimit: null,
 };
 
 // Matcher constants, identical to backend/acoustic_matcher.py.
@@ -355,17 +368,39 @@ class IndexedDbStore implements TriggerStore {
   }
 }
 
+/** The backend's message for a failed request: FastAPI's `detail` string when there is one. */
+async function failureDetail(response: Response): Promise<string> {
+  const text = await response.text().catch(() => '');
+  try {
+    const detail = (JSON.parse(text) as { detail?: unknown }).detail;
+    if (typeof detail === 'string') return detail;
+  } catch {
+    // Not JSON.
+  }
+  return text;
+}
+
 /** The backend's SQLite triggers via /api/triggers; the server assigns ids. */
 class BackendStore implements TriggerStore {
-  constructor(private readonly baseUrl: string) {}
+  constructor(
+    private readonly baseUrl: string,
+    private readonly token: () => string,
+  ) {}
 
   private async request<T>(path: string, init?: RequestInit): Promise<T> {
+    const token = this.token();
     const response = await fetch(`${this.baseUrl}${path}`, {
       ...init,
-      headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+      headers: {
+        'content-type': 'application/json',
+        ...(token ? { authorization: `Bearer ${token}` } : {}),
+        ...(init?.headers ?? {}),
+      },
     });
     if (!response.ok) {
-      const detail = await response.text().catch(() => '');
+      const detail = await failureDetail(response);
+      // Plan limits and sign-in problems are already sentences meant for people.
+      if (response.status === 401 || response.status === 403) throw new Error(detail || 'Sign in to save triggers.');
       throw new Error(`Trigger store ${init?.method ?? 'GET'} ${path} failed: ${response.status} ${detail}`.trim());
     }
     return response.status === 204 ? (undefined as T) : ((await response.json()) as T);
@@ -394,8 +429,8 @@ class BackendStore implements TriggerStore {
   }
 }
 
-function createStore(apiBaseUrl: string): TriggerStore {
-  if (apiBaseUrl && typeof fetch === 'function') return new BackendStore(apiBaseUrl.replace(/\/+$/, ''));
+function createStore(apiBaseUrl: string, token: () => string): TriggerStore {
+  if (apiBaseUrl && typeof fetch === 'function') return new BackendStore(apiBaseUrl.replace(/\/+$/, ''), token);
   return typeof indexedDB === 'undefined' ? new MemoryStore() : new IndexedDbStore();
 }
 
@@ -444,7 +479,7 @@ class TriggerMatcher {
     const { binCount, smoothingFrames } = this.config;
     if (binCount < 8) throw new Error(`binCount must be >= 8, received ${binCount}`);
     if (smoothingFrames < 1) throw new Error('smoothingFrames must be >= 1');
-    this.store = store ?? createStore(this.config.apiBaseUrl);
+    this.store = store ?? createStore(this.config.apiBaseUrl, () => this.config.authToken);
     this.query = new Float64Array(binCount);
     this.history = [];
     for (let i = 0; i < smoothingFrames; i++) this.history.push(new Float64Array(binCount));
@@ -459,6 +494,14 @@ class TriggerMatcher {
     this.triggers.length = 0;
     for (const profile of profiles) this.add(profile);
     return this.list();
+  }
+
+  /** Returns true when the token changed, so the caller can reload the account's triggers. */
+  setAccount(authToken: string, triggerLimit: number | null): boolean {
+    const changed = authToken !== this.config.authToken;
+    this.config = { ...this.config, authToken, triggerLimit };
+    for (const trigger of this.triggers) trigger.consecutive = 0;
+    return changed;
   }
 
   list(): AcousticTriggerProfile[] {
@@ -601,8 +644,11 @@ class TriggerMatcher {
     const scores: TriggerScore[] = [];
     let best: TriggerScore | null = null;
     let bestTrigger: EnrolledTrigger | null = null;
+    const { triggerLimit } = this.config;
+    const matchable = triggerLimit === null ? this.triggers.length : Math.min(Math.max(0, triggerLimit), this.triggers.length);
 
-    for (const trigger of this.triggers) {
+    for (let index = 0; index < matchable; index++) {
+      const trigger = this.triggers[index];
       const score = clamp01(similarity(profile, trigger.template));
       const entry = { id: trigger.profile.id, similarity: score };
       scores.push(entry);
@@ -688,7 +734,7 @@ class TriggerMatcher {
         ctx.postMessage({ type: 'enrolled', profile } satisfies TriggerWorkerResponse);
         ctx.postMessage({ type: 'triggers', triggers: this.list() } satisfies TriggerWorkerResponse);
       })
-      .catch((error: unknown) => fail(error instanceof Error ? error.message : String(error)));
+      .catch(storeFailed);
     return events;
   }
 }
@@ -719,6 +765,11 @@ function dispatch(result: FrameResult): void {
 }
 
 const failed = (error: unknown): void => fail(error instanceof Error ? error.message : String(error));
+
+function storeFailed(error: unknown): void {
+  const response: TriggerWorkerResponse = { type: 'storeError', message: error instanceof Error ? error.message : String(error) };
+  ctx.postMessage(response);
+}
 
 ctx.onmessage = (event: MessageEvent) => {
   const request = event.data as TriggerWorkerRequest;
@@ -773,7 +824,7 @@ ctx.onmessage = (event: MessageEvent) => {
             ctx.postMessage(response);
             postTriggers();
           })
-          .catch(failed);
+          .catch(storeFailed);
         break;
       }
 
@@ -801,18 +852,29 @@ ctx.onmessage = (event: MessageEvent) => {
 
       case 'remove': {
         if (!matcher) return;
-        void matcher.remove(request.id).then(postTriggers).catch(failed);
+        void matcher.remove(request.id).then(postTriggers).catch(storeFailed);
         break;
       }
 
       case 'setThreshold': {
         if (!matcher) return;
-        void matcher.setThreshold(request.id, request.threshold).then(postTriggers).catch(failed);
+        void matcher.setThreshold(request.id, request.threshold).then(postTriggers).catch(storeFailed);
         break;
       }
 
       case 'list': {
         postTriggers();
+        break;
+      }
+
+      case 'account': {
+        if (!matcher) return;
+        // A new session (signed in, back online, renewed) may see a different trigger set than the store loaded at init,
+        // and a re-confirmed account may have saved triggers on another computer.
+        const changed = matcher.setAccount(request.authToken, request.triggerLimit);
+        if ((changed || request.reload) && request.authToken) {
+          void matcher.load().then(postTriggers).catch(storeFailed);
+        }
         break;
       }
 

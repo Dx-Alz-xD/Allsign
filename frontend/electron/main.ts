@@ -1,6 +1,7 @@
 import { app, BrowserWindow, net, protocol, shell, type WebFrameMain } from 'electron';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { registerAccountIpc } from './account';
 import { registerDirectPasteIpc } from './directPaste';
 import {
   GlobalHotkeyManager,
@@ -64,7 +65,7 @@ async function loadDevServer(win: BrowserWindow): Promise<void> {
 let mainWindow: BrowserWindow | null = null;
 let hotkeys: GlobalHotkeyManager | null = null;
 
-/** Only OmniVoice's own pages may call privileged IPC (keyboard automation, hotkey state). */
+/** Only Voicematics' own pages may call privileged IPC (keyboard automation, hotkey state, the account). */
 function isTrustedSender(frame: WebFrameMain | null): boolean {
   if (!frame) return false;
   try {
@@ -104,7 +105,7 @@ function createWindow(): void {
     height: 900,
     minWidth: 360,
     minHeight: 600,
-    title: 'OmniVoice OS',
+    title: 'Voicematics',
     backgroundColor: '#0B0F17',
     autoHideMenuBar: true,
     webPreferences: {
@@ -156,6 +157,7 @@ if (!app.requestSingleInstanceLock()) {
     if (!isDev) serveStaticExport();
 
     registerDirectPasteIpc({ getWindow: () => mainWindow, isTrustedSender });
+    registerAccountIpc({ isTrustedSender });
 
     hotkeys = new GlobalHotkeyManager(handleHotkey, {
       bindings: bindingsWithOverrides(loadHotkeyOverrides(HOTKEY_ACTIONS)),

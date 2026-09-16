@@ -102,7 +102,7 @@ export function NetworkSettingsPanel() {
     <form onSubmit={submit} noValidate className="space-y-10">
       <SettingSection
         title="Connection helper (STUN)"
-        description="Lets OmniVoice OS find a direct path to a caregiver's device. It sees your public IP address, nothing else."
+        description="Lets Voicematics find a direct path to a caregiver's device. It sees your public IP address, nothing else."
       >
         <div>
           <label htmlFor={ids.stun} className="mb-1.5 block font-semibold text-ink">

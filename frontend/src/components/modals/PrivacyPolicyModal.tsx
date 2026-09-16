@@ -3,47 +3,47 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import {
   CircleCheck,
-  CloudOff,
   Cpu,
   Download,
   EyeOff,
   Info,
-  Scale,
+  Sparkles,
   Trash,
   TriangleAlert,
+  UserRound,
   type LucideIcon,
 } from 'lucide-react';
 import { Modal, buttonStyles } from '@/components/modals/Modal';
 import { useModals } from '@/components/modals/ModalProvider';
 import { useSettings } from '@/components/providers/SettingsProvider';
-import { backendUrl } from '@/lib/api/client';
+import { api, backendUrl, getAuthToken } from '@/lib/api/client';
 import { serverHost } from '@/lib/settings/network';
 import { SETTINGS_STORAGE_KEY } from '@/lib/settings/schema';
 import { readStoredData } from '@/lib/settings/storage';
 import { cn } from '@/lib/cn';
 
-export const PRIVACY_LAST_UPDATED = '16 September 2026';
+export const PRIVACY_LAST_UPDATED = '17 September 2026';
 
 const COMMITMENTS: ReadonlyArray<{ icon: LucideIcon; title: string; body: string }> = [
   {
     icon: Cpu,
-    title: '100% on-device processing',
-    body: 'Voice analysis, grammar rules, and sentence reconstruction run on your own computers. No cloud AI or speech service ever receives your voice.',
+    title: 'Your voice is analyzed on this computer',
+    body: 'Pitch, strain, and fluency are measured on your computer as you speak. Audio is never recorded or uploaded, and grammar rules, not AI models, rebuild your sentences.',
   },
   {
-    icon: CloudOff,
-    title: 'Zero cloud data persistence',
-    body: 'There are no accounts and no cloud database. Settings, custom triggers, and session analytics stay in files on your devices.',
+    icon: UserRound,
+    title: 'Your account keeps what you save',
+    body: 'The Voicematics server stores your email, a password hash, your plan and licence, and the triggers, presets, session summaries, and therapy targets you save.',
+  },
+  {
+    icon: Sparkles,
+    title: 'AI only when you ask for it',
+    body: 'Clinical reports and the website assistant send what you give them to Google Gemini or Groq. Nothing you say while using the app goes to an AI model.',
   },
   {
     icon: EyeOff,
-    title: 'Zero telemetry tracking',
-    body: 'No analytics, advertising IDs, crash reports, or usage tracking. OmniVoice OS has no server of its own to send them to.',
-  },
-  {
-    icon: Scale,
-    title: 'HIPAA and GDPR alignment',
-    body: 'Designed around data minimization, local storage, encryption in transit, and your rights to see, export, and erase your data.',
+    title: 'No tracking',
+    body: 'No advertising IDs, usage analytics, or crash reports. See, download, or delete your data whenever you want.',
   },
 ];
 
@@ -82,26 +82,33 @@ function useDeviceChecks(): DeviceCheck[] {
     ];
 
     // The same address the app actually calls: NEXT_PUBLIC_BACKEND_URL, or the local default.
-    let grammar: DeviceCheck;
+    let server: DeviceCheck;
     try {
       const url = new URL(backendUrl());
-      grammar = isLoopbackHost(url.hostname)
-        ? { label: 'Grammar server', value: `On this device (${url.host})`, detail: 'Recognized words stay on this computer.', tone: 'local' }
+      server = isLoopbackHost(url.hostname)
+        ? {
+            label: 'Voicematics server',
+            value: `On this computer (${url.host})`,
+            detail: 'Your account, saved data, and recognized words stay on this computer.',
+            tone: 'local',
+          }
         : {
-            label: 'Grammar server',
-            value: `Another computer (${url.host})`,
-            detail: `Recognized words travel over your network to that computer${url.protocol === 'https:' ? ', encrypted' : ' without encryption'}. Use a server you control.`,
+            label: 'Voicematics server',
+            value: url.host,
+            detail: `Your account, the triggers, presets, and session summaries you save, and recognized words travel to it${
+              url.protocol === 'https:' ? ', encrypted' : ' without encryption'
+            }. Recognized words are rebuilt into sentences and not saved.`,
             tone: 'leaves-device',
           };
     } catch {
-      grammar = { label: 'Grammar server', value: 'Invalid address', detail: 'Recognized words cannot be sent anywhere until this is fixed.', tone: 'info' };
+      server = { label: 'Voicematics server', value: 'Invalid address', detail: 'Nothing can be sent anywhere until this is fixed.', tone: 'info' };
     }
-    checks.push(grammar);
+    checks.push(server);
 
     checks.push({
       label: 'Caregiver link, when you connect one',
       value: turnUrl ? `Direct, with ${serverHost(turnUrl)} as fallback relay` : 'Direct between devices',
-      detail: `Alerts, readings, and rebuilt sentences you share go straight to the caregiver, encrypted. The grammar server only introduces the two devices and sees the room code and connection details such as IP addresses.${
+      detail: `Alerts, readings, and rebuilt sentences you share go straight to the caregiver, encrypted. The Voicematics server only introduces the two devices and sees your account, the room code, and connection details such as IP addresses.${
         turnUrl
           ? ' If a direct path fails, the relay forwards the encrypted data and can also see connection details.'
           : ' No relay is configured.'
@@ -120,9 +127,18 @@ function useDeviceChecks(): DeviceCheck[] {
     });
 
     checks.push({
+      label: 'Clinical reports',
+      value: 'Only when you ask for one',
+      detail:
+        'The session’s voice measurements (never audio) go to the Voicematics server, which asks Google Gemini, or Groq if Gemini fails, to write the summary. Reports are not saved on the server.',
+      tone: 'info',
+    });
+
+    checks.push({
       label: 'Analytics, tracking, and crash reports',
       value: 'None',
-      detail: 'Nothing about how you use OmniVoice OS is collected or sent.',
+      detail:
+        'No usage analytics, advertising IDs, or crash reports. Like any online service, the server may keep ordinary request logs, such as IP addresses and times, to keep it running.',
       tone: 'local',
     });
 
@@ -159,21 +175,37 @@ function DataControls() {
       .then((status) => status.registrations.map(({ action, label, accelerator }) => ({ action, label, accelerator })))
       .catch(() => null);
 
+    // Everything saved with the account, when signed in. A part the plan does not include is simply left out.
+    const token = getAuthToken();
+    const settled = token
+      ? await Promise.allSettled([
+          api.auth.me(token),
+          api.triggers.list({ limit: 500 }),
+          api.presets.list(),
+          api.sessions.list({ limit: 500 }),
+          api.phonemes.targets(),
+        ])
+      : null;
+    const value = (index: number) => (settled?.[index]?.status === 'fulfilled' ? settled[index].value : null);
+
     const payload = {
       exportedAt: new Date().toISOString(),
-      app: 'OmniVoice OS',
+      app: 'Voicematics',
       appVersion: process.env.NEXT_PUBLIC_APP_VERSION ?? null,
       storedInThisApp: stored,
       globalShortcuts: shortcuts ?? null,
-      notIncluded: [
-        'Custom triggers and session analytics live in omnivoice.db on the computer running the grammar server.',
-      ],
+      account: settled
+        ? { account: value(0), triggers: value(1), presets: value(2), sessions: value(3), phonemeTargets: value(4) }
+        : null,
+      notIncluded: token
+        ? []
+        : ['Account data: sign in to include your triggers, presets, sessions, and therapy targets.'],
     };
 
     const url = URL.createObjectURL(new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' }));
     const link = document.createElement('a');
     link.href = url;
-    link.download = `omnivoice-data-${new Date().toISOString().slice(0, 10)}.json`;
+    link.download = `voicematics-data-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     window.setTimeout(() => URL.revokeObjectURL(url), 5000);
     setMessage('Your data file is ready. Choose where to save it.');
@@ -247,7 +279,7 @@ export function PrivacyPolicyModal({ open, onClose }: { open: boolean; onClose: 
       open={open}
       onClose={onClose}
       title="Privacy policy"
-      description={`How OmniVoice OS handles your voice and data. Last updated ${PRIVACY_LAST_UPDATED}.`}
+      description={`How Voicematics handles your voice and data. Last updated ${PRIVACY_LAST_UPDATED}.`}
       size="lg"
       footer={
         <button type="button" onClick={onClose} className={buttonStyles.primary}>
@@ -296,23 +328,29 @@ export function PrivacyPolicyModal({ open, onClose }: { open: boolean; onClose: 
           </button>
         </section>
 
-        <Section id="privacy-what" title="What OmniVoice OS handles">
+        <Section id="privacy-what" title="What Voicematics handles">
           <ul className="list-disc space-y-2 pl-5">
             <li>
-              <strong>Microphone audio.</strong> Processed in memory in real time to measure pitch, volume, and fluency.
-              Raw audio is not recorded or saved.
+              <strong>Your account.</strong> Your email address, a salted Argon2id hash of your password (never the
+              password itself), your plan, your licence key, the computer it is bound to (as a one-way hash), and the
+              computers you stay signed in on. Checkout on the website keeps only the card brand and last four digits.
             </li>
             <li>
-              <strong>Voice measurements</strong> such as pitch, jitter, shimmer, and vocal strain. Shown live; only
-              session summaries (speaking rate, block counts, fluency) are saved, and only on your devices.
+              <strong>Microphone audio.</strong> Processed in memory on your computer in real time to measure pitch, volume,
+              and fluency. Raw audio is not recorded, saved, or uploaded.
             </li>
             <li>
-              <strong>Recognized words and reconstructed sentences.</strong> Sent to the grammar server you configure,
-              and typed into other apps only when you use direct paste.
+              <strong>Voice measurements</strong> such as pitch, jitter, shimmer, and vocal strain. Shown live. With
+              session analytics, session summaries (speaking rate, block counts, fluency) are saved to your account. With
+              a clinical report, the session&apos;s measurements are sent once to write it.
             </li>
             <li>
-              <strong>Custom triggers.</strong> A sound fingerprint of 128 numbers for each sound you teach OmniVoice OS.
-              A fingerprint cannot be played back as audio.
+              <strong>Recognized words and reconstructed sentences.</strong> Sent to the Voicematics server to be rebuilt
+              into sentences, not saved there, and typed into other apps only when you use direct paste.
+            </li>
+            <li>
+              <strong>Custom triggers, presets, and therapy targets.</strong> Saved to your account. A trigger is a sound
+              fingerprint of 128 numbers, which cannot be played back as audio.
             </li>
             <li>
               <strong>Settings</strong>, including display preferences, audio devices, shortcuts, and relay server
@@ -323,20 +361,31 @@ export function PrivacyPolicyModal({ open, onClose }: { open: boolean; onClose: 
 
         <Section id="privacy-where" title="Where your data is stored">
           <p>
-            Settings and relay credentials are saved in this app&apos;s storage on this device. Custom shortcuts are saved in
-            the app&apos;s data folder. Custom triggers and session analytics are saved in <strong>omnivoice.db</strong> on the
-            computer that runs the grammar server. Nothing is stored anywhere else.
+            <strong>On the Voicematics server:</strong> your account, plan, and licence, and the triggers, presets, session
+            summaries, and therapy targets you save. Only your account can read them.
+          </p>
+          <p>
+            <strong>On this computer:</strong> settings and relay credentials in this app&apos;s storage, custom shortcuts in
+            the app&apos;s data folder, and a sign-in token that works only on this computer, encrypted with your system
+            keychain where one is available. Your password is never stored on this computer.
           </p>
         </Section>
 
         <Section id="privacy-leaves" title="When data leaves this device">
-          <p>Only in these cases, and only because you set them up:</p>
           <ul className="list-disc space-y-2 pl-5">
-            <li>Your grammar server runs on another computer. The check above tells you if it does.</li>
+            <li>
+              While you are signed in, the app checks your plan with the Voicematics server every few minutes and saves the
+              data listed above to your account.
+            </li>
+            <li>Recognized words go to the Voicematics server to be rebuilt into sentences.</li>
             <li>
               You connect a caregiver. Shared alerts, readings, and rebuilt sentences travel encrypted between the two
-              devices, through a relay only if a direct connection fails. The grammar server sets up the connection and
+              devices, through a relay only if a direct connection fails. The Voicematics server sets up the connection and
               sees the room code and IP addresses, never the shared data.
+            </li>
+            <li>
+              You ask for a clinical report. The session&apos;s measurements go to the Voicematics server and on to Google
+              Gemini or Groq, whose own privacy terms apply to that request.
             </li>
             <li>
               You use direct paste. The text becomes part of the app you paste into, such as Slack, Word, Zoom, or
@@ -347,20 +396,20 @@ export function PrivacyPolicyModal({ open, onClose }: { open: boolean; onClose: 
 
         <Section id="privacy-health" title="Health information, HIPAA, and GDPR">
           <p>
-            Voice measurements can reveal health information, so OmniVoice OS treats all of your data as sensitive.
+            Voice measurements can reveal health information, so Voicematics treats all of your data as sensitive.
           </p>
           <p>
-            <strong>HIPAA.</strong> OmniVoice OS never receives your data, so its makers do not act as a covered entity or
-            business associate. If a clinic uses OmniVoice OS with patients, the clinic remains responsible for its own
-            HIPAA obligations. The design supports them: data stays on devices the clinic controls, and caregiver
-            connections are encrypted.
+            <strong>HIPAA.</strong> Voicematics stores account data on its server and is not offered as a HIPAA-covered
+            service. If a clinic uses Voicematics with patients, the clinic remains responsible for its own HIPAA
+            obligations, including deciding whether session data may be saved to Voicematics accounts and whether clinical
+            reports may be written with a third-party AI provider.
           </p>
           <p>
-            <strong>GDPR.</strong> Processing happens on your device, under your control. OmniVoice OS follows the GDPR
-            principles of data minimization, purpose limitation, storage limitation, and integrity and confidentiality,
-            and supports your rights to access, export, and erase your data below.
+            <strong>GDPR.</strong> Voicematics collects only what the features you use need, keeps it with your account,
+            and supports your rights to access, export, correct, and erase it: download a copy below, delete sessions and
+            triggers one by one in the app, or delete your whole account under Account.
           </p>
-          <p>This alignment is a design commitment, not a certification or legal advice.</p>
+          <p>This is a description of how Voicematics works, not a certification or legal advice.</p>
         </Section>
 
         <section aria-labelledby="privacy-rights" className="space-y-3">
@@ -368,9 +417,9 @@ export function PrivacyPolicyModal({ open, onClose }: { open: boolean; onClose: 
             Your data, your choice
           </h3>
           <p className="max-w-prose leading-relaxed text-mist">
-            Download everything OmniVoice OS stores in this app, or delete it. To remove custom triggers and session
-            analytics as well, delete omnivoice.db on the computer running the grammar server. You can also turn off
-            microphone access for OmniVoice OS in your system settings at any time.
+            Download a copy of everything Voicematics keeps in this app and, while you are signed in, in your account. Delete
+            this computer&apos;s data below, or your account and everything saved with it under Account. You can also turn off
+            microphone access for Voicematics in your system settings at any time.
           </p>
           <DataControls />
         </section>

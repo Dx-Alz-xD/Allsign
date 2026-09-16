@@ -1,9 +1,11 @@
 'use client';
 
 import type { RefObject } from 'react';
-import { AudioWaveform, Menu, Mic, MicOff, Settings, X } from 'lucide-react';
+import { AudioWaveform, CircleUserRound, Menu, Mic, MicOff, Settings, WifiOff, X } from 'lucide-react';
 import type { ProfileMode } from '@shared/types';
+import { useAccount } from '@/components/providers/AccountProvider';
 import { ProfileSwitcher } from '@/components/ui/ProfileSwitcher';
+import { PLAN_NAMES } from '@/lib/account/plans';
 import { cn } from '@/lib/cn';
 
 interface NavbarProps {
@@ -15,6 +17,7 @@ interface NavbarProps {
   muted: boolean;
   onToggleMute: () => void;
   onOpenSettings: () => void;
+  onOpenAccount: () => void;
 }
 
 export function Navbar({
@@ -26,7 +29,10 @@ export function Navbar({
   muted,
   onToggleMute,
   onOpenSettings,
+  onOpenAccount,
 }: NavbarProps) {
+  const { entitlements, offline, email } = useAccount();
+  const plan = PLAN_NAMES[entitlements.tier];
   return (
     <header className="sticky top-0 z-40 h-16 border-b border-white/10 bg-void/70 backdrop-blur-xl">
       <div className="flex h-full items-center gap-2 px-4 sm:gap-3 sm:px-6">
@@ -47,11 +53,23 @@ export function Navbar({
             <AudioWaveform aria-hidden className="size-5 text-void" strokeWidth={2.5} />
           </span>
           <span className="hidden font-display text-lg font-bold tracking-tight text-ink sm:inline">
-            OmniVoice OS
+            Voicematics
           </span>
         </div>
 
         <div className="ml-auto flex items-center gap-2 sm:gap-3">
+          <button
+            type="button"
+            onClick={onOpenAccount}
+            aria-label={`Account: ${email ?? ''}, ${plan} plan${offline ? ', offline' : ''}`}
+            title={email ?? undefined}
+            className="inline-flex h-10 items-center gap-2 rounded-xl border border-white/[0.12] bg-white/[0.06] px-2.5 text-mist transition-colors hover:border-neon-cyan/40 hover:text-ink"
+          >
+            {offline ? <WifiOff aria-hidden className="size-[18px] text-warn" /> : <CircleUserRound aria-hidden className="size-[18px]" />}
+            <span aria-hidden className={`hidden font-display text-sm font-semibold md:inline ${entitlements.tier === 'free' ? '' : 'text-neon-cyan'}`}>
+              {plan}
+            </span>
+          </button>
           <button
             type="button"
             aria-label="Settings"

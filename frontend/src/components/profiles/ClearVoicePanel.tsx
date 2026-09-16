@@ -64,7 +64,7 @@ export function TokenInput({ compact = false }: { compact?: boolean }) {
         )}
         {dictationAvailable && (
           <span className="text-sm text-mist">
-            System dictation hands audio to your browser vendor&apos;s recognizer, outside OmniVoice&apos;s no-model guarantee.
+            System dictation hands audio to your browser vendor&apos;s recognizer, outside Voicematics&apos; no-model guarantee.
           </span>
         )}
       </div>

@@ -6,16 +6,18 @@ from typing import TYPE_CHECKING
 
 import pytest
 from sqlalchemy import select
+from starlette.websockets import WebSocketDisconnect
 from sqlalchemy.orm import Session
 
 import database
+from config import get_settings
 from models import AcousticTrigger, CustomPhonemeTarget, ProfilePreset, SessionAnalytics, User, utcnow
 from routers import auth
 from routers.triggers import profile_cache
 from web_auth import licenses, tokens
 from web_auth.database import WebBase
 from web_auth.database import engine as web_engine
-from web_auth.models import LicenseKey, Subscription, WebUser
+from web_auth.models import DeviceSession, LicenseKey, Subscription, WebUser
 from web_auth.plans import FREE_TRIGGER_LIMIT, PLAN_FEATURES
 
 if TYPE_CHECKING:
@@ -170,8 +172,8 @@ def test_triggers_are_isolated_per_account(client: "TestClient"):
 
 
 def test_presets_sessions_and_targets_are_isolated(client: "TestClient"):
-    _, _, ada = make_user("ada@example.com")
-    _, _, bob = make_user("bob@example.com")
+    _, _, ada = make_user("ada@example.com", "pro")
+    _, _, bob = make_user("bob@example.com", "pro")
     preset = {"name": "Reading", "mode": "fluency", "dafDelayMs": 60, "fsfOctaveShift": -0.5, "parameters": {}}
     session_body = {"profileMode": "fluency", "wpm": 120, "stutterCount": 2, "avgBlockDurationMs": 500, "fluencyPercentage": 95, "sessionDurationSeconds": 60}
     target = {"phoneme": "i", "exampleWord": "beet", "f1": 270, "f2": 2290, "f3": 3010}
@@ -202,3 +204,242 @@ def test_bad_or_disabled_tokens_are_rejected(client: "TestClient"):
     with Session(web_engine) as session, session.begin():
         session.get(WebUser, user.id).isActive = False
     assert client.get("/api/triggers", headers=headers).status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Enforcement (REQUIRE_ACCOUNT on, as on the hosted service)
+
+PRESET = {"name": "Reading", "mode": "fluency", "dafDelayMs": 60, "fsfOctaveShift": -0.5, "parameters": {}}
+SESSION = {"profileMode": "clearvoice", "wpm": 120, "stutterCount": 0, "avgBlockDurationMs": 0, "fluencyPercentage": 100, "sessionDurationSeconds": 60}
+TARGET = {"phoneme": "i", "exampleWord": "beet", "f1": 270, "f2": 2290, "f3": 3010}
+SIGNAL_PROTOCOL = "voicematics.signal"
+
+
+@pytest.fixture
+def accounts_required(monkeypatch):
+    monkeypatch.setattr(get_settings(), "REQUIRE_ACCOUNT", True)
+
+
+def signal_close_code(client: "TestClient", role: str, token: str | None = None) -> int | None:
+    """The close code the relay answers a join with, or None when the join was accepted."""
+    protocols = [SIGNAL_PROTOCOL] + ([f"voicematics.token.{token}"] if token else [])
+    with client.websocket_connect(f"/ws/signal/ROOM-1?role={role}&client=device-0001", subprotocols=protocols) as socket:
+        try:
+            message = socket.receive_json()
+        except WebSocketDisconnect as closed:
+            return closed.code
+        assert message["type"] == "joined"
+        assert socket.accepted_subprotocol == SIGNAL_PROTOCOL
+        return None
+
+
+def bearer(headers: dict) -> str:
+    return headers["Authorization"].removeprefix("Bearer ")
+
+
+@pytest.mark.usefixtures("accounts_required")
+def test_app_data_needs_a_session(client: "TestClient"):
+    for method, path, body in [
+        ("get", "/api/triggers", None),
+        ("post", "/api/triggers", trigger_body("hum")),
+        ("post", "/api/triggers/match", {"spectralFingerprint": FINGERPRINT, "topK": 1}),
+        ("get", "/api/presets", None),
+        ("post", "/api/presets", PRESET),
+        ("get", "/api/sessions", None),
+        ("post", "/api/sessions", SESSION),
+        ("get", "/api/phonemes/targets", None),
+    ]:
+        response = client.request(method.upper(), path, json=body)
+        assert response.status_code == 401, (path, response.text)
+        assert response.headers["www-authenticate"] == "Bearer"
+
+    # The speech path, the word finder, pricing and the website assistant's status stay public.
+    assert client.post("/api/grammar/translate", json={"rawSpeechTokens": ["me", "want", "water"]}).status_code == 200
+    assert client.get("/api/phonemes/lookup", params={"prefix": ""}).status_code == 200
+    assert client.get("/api/billing/plans").status_code == 200
+    assert client.get("/api/agent/status").status_code == 200
+    assert client.get("/health/live").status_code == 200
+
+
+@pytest.mark.usefixtures("accounts_required")
+def test_free_plan_limits(client: "TestClient"):
+    _, _, free = make_user("free@example.com")
+
+    first = client.post("/api/triggers", json=trigger_body("hum"), headers=free)
+    assert first.status_code == 201
+    second = client.post("/api/triggers", json=trigger_body("click"), headers=free)
+    assert second.status_code == 403 and "Voicematics Pro" in second.json()["detail"]
+    # Editing the one trigger a Free plan keeps is still allowed.
+    assert client.patch(f"/api/triggers/{first.json()['id']}", json={"threshold": 0.7}, headers=free).status_code == 200
+
+    assert client.post("/api/presets", json=PRESET, headers=free).status_code == 403
+    assert client.post("/api/presets", json={**PRESET, "mode": "therapy"}, headers=free).status_code == 403
+    assert client.post("/api/presets", json={**PRESET, "mode": "clearvoice", "dafDelayMs": 0, "fsfOctaveShift": 0}, headers=free).status_code == 201
+    assert client.get("/api/presets", headers=free).status_code == 200
+
+    assert client.get("/api/sessions", headers=free).status_code == 403
+    assert client.post("/api/sessions", json=SESSION, headers=free).status_code == 403
+    assert client.get("/api/sessions/summary", headers=free).status_code == 403
+    assert client.get("/api/phonemes/targets", headers=free).status_code == 403
+    assert client.post("/api/phonemes/targets", json=TARGET, headers=free).status_code == 403
+
+
+@pytest.mark.usefixtures("accounts_required")
+def test_upgrade_unlocks_and_a_lapse_locks_again(client: "TestClient"):
+    _, _, headers = make_user("ada@example.com")
+    assert client.post("/api/sessions", json=SESSION, headers=headers).status_code == 403
+
+    body = subscribe(client, headers)
+    assert client.post("/api/sessions", json=SESSION, headers=headers).status_code == 201
+    assert client.post("/api/presets", json=PRESET, headers=headers).status_code == 201
+    assert client.post("/api/phonemes/targets", json=TARGET, headers=headers).status_code == 201
+    for name in ("one", "two", "three"):
+        assert client.post("/api/triggers", json=trigger_body(name), headers=headers).status_code == 201
+
+    with Session(web_engine) as session, session.begin():
+        session.get(Subscription, body["subscription"]["id"]).currentPeriodEnd = utcnow() - timedelta(minutes=1)
+
+    # The same token: the plan is settled on every request, not read from the token.
+    assert client.get("/api/sessions", headers=headers).status_code == 403
+    assert client.post("/api/triggers", json=trigger_body("four"), headers=headers).status_code == 403
+    # Triggers made on Pro are kept and listed, but only the oldest one within the Free limit is matched.
+    assert [t["name"] for t in client.get("/api/triggers", headers=headers).json()] == ["one", "two", "three"]
+    match = client.post("/api/triggers/match", json={"spectralFingerprint": FINGERPRINT, "topK": 5}, headers=headers).json()
+    assert [c["name"] for c in match["candidates"]] == ["one"]
+
+
+@pytest.mark.usefixtures("accounts_required")
+def test_caregiver_relay_needs_pro_for_the_speaker(client: "TestClient"):
+    _, _, free = make_user("free@example.com")
+    _, _, pro = make_user("pro@example.com", "pro")
+
+    assert signal_close_code(client, "speaker") == 4401
+    assert signal_close_code(client, "speaker", "not-a-token") == 4401
+    assert signal_close_code(client, "speaker", bearer(free)) == 4402
+    assert signal_close_code(client, "speaker", bearer(pro)) is None
+    # The caregiver can watch without an account, but a token that is sent must be valid.
+    assert signal_close_code(client, "caregiver") is None
+    assert signal_close_code(client, "caregiver", "not-a-token") == 4401
+
+
+def test_local_mode_keeps_every_feature(client: "TestClient"):
+    assert get_settings().REQUIRE_ACCOUNT is False
+    for name in ("one", "two"):
+        assert client.post("/api/triggers", json=trigger_body(name)).status_code == 201
+    assert client.post("/api/sessions", json=SESSION).status_code == 201
+    assert client.post("/api/presets", json=PRESET).status_code == 201
+    assert signal_close_code(client, "speaker") is None
+    # A Free account's token still gets Free limits in local mode.
+    _, _, free = make_user("free@example.com")
+    assert client.post("/api/sessions", json=SESSION, headers=free).status_code == 403
+    assert signal_close_code(client, "speaker", bearer(free)) == 4402
+
+
+def test_clinical_reports_are_pro_and_saved_grammar_is_local_only(client: "TestClient", monkeypatch):
+    from agents import cfg_compiler, telemetry_reporter
+    from routers import agents as agent_routes
+
+    monkeypatch.setattr(agent_routes, "require_model", lambda: object())
+    monkeypatch.setattr(telemetry_reporter, "generate_report", lambda log, model: {
+        "session_duration_minutes": 1.0, "stuttering_reduction_index": 0.0, "vocal_fatigue_alert": False,
+        "slp_summary_paragraph": "ok", "recommended_daf_delay_ms": 60,
+    })
+    saves: list[bool] = []
+
+    def fake_compile(prompt, model, save):
+        saves.append(save)
+        raise ValueError("stop here")
+
+    monkeypatch.setattr(cfg_compiler, "compile_grammar", fake_compile)
+    agent_routes.rate_limiter.clear()
+    log = {"samples": [], "events": [], "dafDelayMs": 0, "fsfOctaveShift": 0}
+
+    _, _, free = make_user("free@example.com")
+    _, _, pro = make_user("pro@example.com", "pro")
+    assert client.post("/api/agent/generate-report", json=log, headers=free).status_code == 403
+    assert client.post("/api/agent/generate-report", json=log, headers=pro).status_code == 200
+
+    client.post("/api/agent/compile-grammar", json={"prompt": "reorder questions", "save": True}, headers=pro)
+    client.post("/api/agent/compile-grammar", json={"prompt": "reorder questions", "save": True})
+    assert saves == [False, True]
+
+    monkeypatch.setattr(get_settings(), "REQUIRE_ACCOUNT", True)
+    assert client.post("/api/agent/generate-report", json=log).status_code == 401
+    assert client.post("/api/agent/compile-grammar", json={"prompt": "reorder questions"}).status_code == 401
+
+
+# ---------------------------------------------------------------------------
+# Remembered computers
+
+
+def test_a_remembered_computer_gets_fresh_sessions_until_it_signs_out(client: "TestClient"):
+    user, _, headers = make_user("ada@example.com", "pro")
+    assert client.post("/api/auth/devices", json={"hardwareId": HARDWARE_A}).status_code == 401
+
+    registered = client.post("/api/auth/devices", json={"hardwareId": HARDWARE_A, "label": "Linux desktop"}, headers=headers)
+    assert registered.status_code == 201
+    device_token = registered.json()["deviceToken"]
+    with Session(web_engine) as session:
+        stored = session.scalars(select(DeviceSession)).one()
+        # Neither the secret nor the raw machine id is stored.
+        assert device_token not in (stored.secretHash, stored.hardwareFingerprint) and stored.hardwareFingerprint != HARDWARE_A
+
+    fresh = client.post("/api/auth/devices/session", json={"deviceToken": device_token, "hardwareId": HARDWARE_A})
+    assert fresh.status_code == 200
+    body = fresh.json()
+    assert body["user"]["id"] == user.id and body["entitlements"]["tier"] == "pro"
+    assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {body['token']}"}).status_code == 200
+
+    # The token is useless on another machine, and every failure looks the same.
+    other = client.post("/api/auth/devices/session", json={"deviceToken": device_token, "hardwareId": HARDWARE_B})
+    unknown = client.post("/api/auth/devices/session", json={"deviceToken": "x" * 43, "hardwareId": HARDWARE_A})
+    assert other.status_code == unknown.status_code == 401 and other.json() == unknown.json()
+
+    assert client.post("/api/auth/devices/revoke", json={"deviceToken": device_token}).status_code == 204
+    assert client.post("/api/auth/devices/revoke", json={"deviceToken": device_token}).status_code == 204
+    assert client.post("/api/auth/devices/session", json={"deviceToken": device_token, "hardwareId": HARDWARE_A}).status_code == 401
+
+
+def test_disabled_accounts_and_old_devices_lose_their_sessions(client: "TestClient"):
+    user, _, headers = make_user("ada@example.com")
+    tokens_issued = [
+        client.post("/api/auth/devices", json={"hardwareId": f"machine-{index:04d}"}, headers=headers).json()["deviceToken"]
+        for index in range(auth.MAX_DEVICES + 1)
+    ]
+    # Registering one computer past the limit signed the least recently used one out.
+    assert client.post("/api/auth/devices/session", json={"deviceToken": tokens_issued[0], "hardwareId": "machine-0000"}).status_code == 401
+    assert client.post("/api/auth/devices/session", json={"deviceToken": tokens_issued[-1], "hardwareId": f"machine-{auth.MAX_DEVICES:04d}"}).status_code == 200
+
+    with Session(web_engine) as session, session.begin():
+        session.get(WebUser, user.id).isActive = False
+    assert client.post("/api/auth/devices/session", json={"deviceToken": tokens_issued[-1], "hardwareId": f"machine-{auth.MAX_DEVICES:04d}"}).status_code == 401
+
+
+def test_deleting_an_account_erases_everything_saved_with_it(client: "TestClient"):
+    user, _, headers = make_user("ada@example.com", "pro")
+    with Session(web_engine) as session, session.begin():
+        session.get(WebUser, user.id).passwordHash = auth.hash_password("correct horse battery")
+    _, _, other = make_user("bob@example.com", "pro")
+    subscribe(client, headers)
+    client.post("/api/auth/devices", json={"hardwareId": HARDWARE_A}, headers=headers)
+    client.post("/api/triggers", json=trigger_body("hum"), headers=headers)
+    client.post("/api/presets", json={"name": "Reading", "mode": "fluency", "dafDelayMs": 60, "fsfOctaveShift": 0, "parameters": {}}, headers=headers)
+    client.post("/api/triggers", json=trigger_body("Bob hum"), headers=other)
+
+    assert client.post("/api/auth/me/delete", json={"password": "correct horse battery"}).status_code == 401
+    wrong = client.post("/api/auth/me/delete", json={"password": "wrong password"}, headers=headers)
+    assert wrong.status_code == 403
+    assert client.get("/api/auth/me", headers=headers).status_code == 200
+
+    assert client.post("/api/auth/me/delete", json={"password": "correct horse battery"}, headers=headers).status_code == 204
+    assert client.get("/api/auth/me", headers=headers).status_code == 401
+    with Session(web_engine) as session:
+        assert session.scalars(select(LicenseKey).where(LicenseKey.userId == user.id)).all() == []
+        assert session.scalars(select(Subscription).where(Subscription.userId == user.id)).all() == []
+        assert session.scalars(select(DeviceSession).where(DeviceSession.userId == user.id)).all() == []
+    with Session(database.engine) as session:
+        assert session.get(User, user.id) is None
+        assert session.scalars(select(AcousticTrigger).where(AcousticTrigger.userId == user.id)).all() == []
+        assert session.scalars(select(ProfilePreset).where(ProfilePreset.userId == user.id)).all() == []
+    # Other accounts are untouched.
+    assert [t["name"] for t in client.get("/api/triggers", headers=other).json()] == ["Bob hum"]

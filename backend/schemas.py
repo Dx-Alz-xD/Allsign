@@ -291,6 +291,35 @@ class LicenseVerifyResponse(BaseModel):
     triggerLimit: Optional[int] = None
     expiresAt: Optional[UtcDatetime] = None
 
+HardwareId = Annotated[str, StringConstraints(strip_whitespace=True, min_length=8, max_length=256)]
+DeviceToken = Annotated[str, StringConstraints(strip_whitespace=True, min_length=32, max_length=128)]
+
+
+class DeviceRegisterRequest(BaseModel):
+    hardwareId: HardwareId
+    label: Annotated[str, StringConstraints(strip_whitespace=True, max_length=80)] = ""
+
+
+class DeviceRegisterResponse(BaseModel):
+    deviceId: str
+    # Returned once; the desktop app keeps it encrypted and the backend only stores its SHA-256.
+    deviceToken: str
+
+
+class DeviceSessionRequest(BaseModel):
+    deviceToken: DeviceToken
+    hardwareId: HardwareId
+
+
+class DeviceRevokeRequest(BaseModel):
+    deviceToken: DeviceToken
+
+
+class AccountDeleteRequest(BaseModel):
+    # The password again, so a session left open on a shared computer cannot erase the account.
+    password: Annotated[str, StringConstraints(min_length=1, max_length=MAX_PASSWORD_CHARS)]
+
+
 class LicenseDeactivateResponse(BaseModel):
     key: str
     hardwareBound: bool

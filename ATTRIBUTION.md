@@ -1,6 +1,6 @@
 # Attribution and Data Usage
 
-This file records the third-party data and software the OmniVoice OS backend (`backend/`) depends on, what each is used for, and the terms that apply. Frontend packages are listed in `frontend/package-lock.json` and are not covered here.
+This file records the third-party data and software the Voicematics backend (`backend/`) depends on, what each is used for, and the terms that apply. Frontend packages are listed in `frontend/package-lock.json` and are not covered here.
 
 Raw dataset files are downloaded to `backend/data/raw/` by `backend/scripts/kaggle_sync.py`. That folder is git-ignored, so none of the datasets below are redistributed through this repository. Only values derived from them (pronunciations, frequency ranks, the phoneme trie and practice-word lists) are stored in each install's local SQLite database.
 

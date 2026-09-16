@@ -82,7 +82,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="OmniVoice OS Backend", lifespan=lifespan)
+app = FastAPI(title="Voicematics API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,

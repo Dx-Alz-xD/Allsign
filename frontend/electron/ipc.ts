@@ -11,7 +11,12 @@ export type IpcInvokeChannel =
   | 'hotkeys:status'
   | 'hotkeys:update'
   | 'hotkeys:reset'
-  | 'hotkeys:suspend';
+  | 'hotkeys:suspend'
+  | 'account:hardware-id'
+  | 'account:load'
+  | 'account:save'
+  | 'account:clear'
+  | 'account:storage';
 
 export type IpcEventChannel = 'hotkeys:action' | 'hotkeys:changed';
 
@@ -98,6 +103,14 @@ export type HotkeyUpdateResult =
   | { ok: true; status: HotkeyStatus }
   | { ok: false; status: HotkeyStatus; errors: Partial<Record<HotkeyAction, string>> };
 
+/* Voicematics account -------------------------------------------------- */
+
+/**
+ * Where the signed-in account is kept: `keychain` encrypted with the OS keychain, `file-only` in an owner-only file
+ * because Linux has no keyring running, `memory-only` not kept at all (sign in on every launch).
+ */
+export type AccountStorageStatus = 'keychain' | 'file-only' | 'memory-only';
+
 /* Bridge exposed on window.omnivoice -------------------------------------- */
 
 export interface OmniVoiceBridge {
@@ -122,6 +135,16 @@ export interface OmniVoiceBridge {
     onAction(listener: (action: HotkeyAction) => void): () => void;
     /** Fires after shortcuts change, from any window. Returns an unsubscribe function. */
     onChange(listener: (status: HotkeyStatus) => void): () => void;
+  };
+  account: {
+    /** SHA-256 of this machine's id, for binding the licence. */
+    getHardwareId(): Promise<string>;
+    /** The record saved by `save`, or null. */
+    load(): Promise<string | null>;
+    /** Keeps the record (at most 64 000 characters) and says how it is protected. */
+    save(record: string): Promise<AccountStorageStatus>;
+    clear(): Promise<void>;
+    getStorageStatus(): Promise<AccountStorageStatus>;
   };
   display: {
     /** Page zoom used for text size, 1 to 2. */

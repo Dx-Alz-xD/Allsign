@@ -25,7 +25,7 @@ const body = localFont({
 
 export const metadata: Metadata = {
   title: 'Voicematics',
-  description: 'Sub-15ms assistive speech realignment. 100% on-device.',
+  description: 'Sub-15ms assistive speech realignment. Your audio stays on your device.',
 };
 
 export const viewport: Viewport = {

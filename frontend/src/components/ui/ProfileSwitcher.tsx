@@ -4,6 +4,9 @@ import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { Check, ChevronDown } from 'lucide-react';
 import type { ProfileMode } from '@shared/types';
+import { ProBadge } from '@/components/account/PlanGate';
+import { useAccount } from '@/components/providers/AccountProvider';
+import { PROFILE_FEATURE } from '@/lib/account/plans';
 import { PROFILE_PRESETS, getProfilePreset } from '@/lib/profiles';
 import { cn } from '@/lib/cn';
 
@@ -19,6 +22,7 @@ function indexOfProfile(profile: ProfileMode): number {
 }
 
 export function ProfileSwitcher({ value, onChange }: ProfileSwitcherProps) {
+  const { has } = useAccount();
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(() => indexOfProfile(value));
   const rootRef = useRef<HTMLDivElement>(null);
@@ -176,8 +180,9 @@ export function ProfileSwitcher({ value, onChange }: ProfileSwitcherProps) {
                     className={cn('mt-0.5 size-5 shrink-0', isSelected ? 'text-neon-cyan' : 'text-mist')}
                   />
                   <span className="min-w-0 flex-1">
-                    <span className="block font-display text-[0.95rem] font-semibold text-ink">
+                    <span className="flex flex-wrap items-center gap-2 font-display text-[0.95rem] font-semibold text-ink">
                       {preset.label}
+                      {!has(PROFILE_FEATURE[preset.id]) && <ProBadge />}
                     </span>
                     <span className="mt-0.5 block text-sm leading-snug text-mist">{preset.description}</span>
                   </span>

@@ -43,6 +43,8 @@ export interface CaregiverLinkOptions {
   iceServers: RTCIceServer[];
   /** Stable for this device across reconnects; 8-64 letters, digits, - or _. Generated when omitted. */
   clientId?: string;
+  /** The Voicematics session token, read on every (re)connect. The speaker needs one on a Pro plan. */
+  getAuthToken?: () => string | null;
   onMessage: (message: CaregiverMessage) => void;
   onState: (state: CaregiverLinkState) => void;
 }
@@ -53,8 +55,12 @@ const CHANNEL_LABEL = 'omnivoice';
 const PING_INTERVAL_MS = 2000;
 const RECONNECT_DELAY_MS = 3000;
 const MAX_RECONNECTS = 5;
+const CLOSE_UNAUTHORIZED = 4401;
+const CLOSE_PLAN_REQUIRED = 4402;
 const CLOSE_ROLE_TAKEN = 4409;
 const CLOSE_REPLACED = 4410;
+const SIGNAL_PROTOCOL = 'voicematics.signal';
+const TOKEN_PROTOCOL_PREFIX = 'voicematics.token.';
 const BUFFERED_LOW_BYTES = 256 * 1024;
 
 export const PEER_LABELS: Record<CaregiverRole, string> = {
@@ -111,9 +117,13 @@ export class CaregiverLink {
     // Reconnecting the relay while the data channel is open must not report the link as down.
     this.update(this.connected ? { error: null } : { status: 'signalling', error: null });
     let socket: WebSocket;
+    // The token travels as a subprotocol, so it never appears in a URL or an access log.
+    const token = this.options.getAuthToken?.() ?? null;
+    const protocols = token ? [SIGNAL_PROTOCOL, `${TOKEN_PROTOCOL_PREFIX}${token}`] : [SIGNAL_PROTOCOL];
     try {
       socket = new WebSocket(
         `${signalUrl}/ws/signal/${encodeURIComponent(room)}?role=${role}&client=${encodeURIComponent(this.clientId)}`,
+        protocols,
       );
     } catch (error) {
       this.update({ status: 'error', error: error instanceof Error ? error.message : String(error) });
@@ -143,6 +153,14 @@ export class CaregiverLink {
       if (this.closedByUser) return;
       if (event.code === CLOSE_ROLE_TAKEN) {
         this.update({ status: 'error', error: `Someone is already connected as the ${role} in room ${room}.` });
+        return;
+      }
+      if (event.code === CLOSE_UNAUTHORIZED) {
+        this.update({ status: 'error', error: 'Sign in to your Voicematics account to share as the speaker.' });
+        return;
+      }
+      if (event.code === CLOSE_PLAN_REQUIRED) {
+        this.update({ status: 'error', error: 'Sharing as the speaker is part of Voicematics Pro.' });
         return;
       }
       // A newer connection from this device took over; it owns the link now.

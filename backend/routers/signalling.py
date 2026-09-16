@@ -7,6 +7,12 @@ travel over the peer-to-peer data channel. Rooms live in this process's memory, 
 A device may pass `?client=<id>`, an id it keeps across reconnects. When the same device comes back while the
 relay still holds its old connection (a network drop is not always noticed at once), the new connection takes
 over the role and the old one is closed with 4410. A different device asking for a taken role gets 4409.
+
+Sharing as the speaker is part of Voicematics Pro. Browsers cannot set headers on a WebSocket, and a token in
+the URL would end up in access logs, so the session token travels as a subprotocol: the client offers
+`voicematics.signal` and `voicematics.token.<token>`, and the relay accepts `voicematics.signal`. Without a
+session (when accounts are required) the speaker is closed with 4401, on a plan without the caregiver link
+with 4402. The caregiver side needs no account, so a family member can watch from any browser.
 """
 
 import logging
@@ -14,11 +20,14 @@ import re
 from dataclasses import dataclass
 
 from fastapi import APIRouter, WebSocket
+from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from starlette.websockets import WebSocketState
 
 from config import get_settings
+from ownership import AccountError, resolve_account
 from schemas import PeerSignal, SignalError, SignalJoined, SignalPeerJoined, SignalPeerLeft
+from web_auth.plans import FEATURE_NAMES
 
 router = APIRouter(tags=["caregiver-signalling"])
 log = logging.getLogger(__name__)
@@ -32,12 +41,16 @@ MAX_MESSAGE_CHARS = 64_000
 CLOSE_TOO_BIG = 1009
 CLOSE_TRY_AGAIN_LATER = 1013
 CLOSE_BAD_REQUEST = 4400
+CLOSE_UNAUTHORIZED = 4401
+CLOSE_PLAN_REQUIRED = 4402
 CLOSE_FORBIDDEN = 4403
 CLOSE_ROLE_TAKEN = 4409
 CLOSE_REPLACED = 4410
 
-peer_signal = TypeAdapter(PeerSignal)
+SIGNAL_PROTOCOL = "voicematics.signal"
+TOKEN_PROTOCOL_PREFIX = "voicematics.token."
 
+peer_signal = TypeAdapter(PeerSignal)
 
 
 @dataclass(frozen=True)
@@ -60,6 +73,15 @@ def origin_allowed(origin: str | None) -> bool:
     if "*" in settings.CORS_ORIGINS or origin in settings.CORS_ORIGINS:
         return True
     return bool(settings.CORS_ORIGIN_REGEX) and re.fullmatch(settings.CORS_ORIGIN_REGEX, origin) is not None
+
+
+def offered_protocols(websocket: WebSocket) -> list[str]:
+    header = websocket.headers.get("sec-websocket-protocol", "")
+    return [value.strip() for value in header.split(",") if value.strip()]
+
+
+def session_token(protocols: list[str]) -> str | None:
+    return next((value[len(TOKEN_PROTOCOL_PREFIX) :] for value in protocols if value.startswith(TOKEN_PROTOCOL_PREFIX)), None)
 
 
 async def send(socket: WebSocket, message: BaseModel) -> bool:
@@ -103,7 +125,9 @@ async def signal(websocket: WebSocket, room: str, role: str = "", client: str = 
     if not origin_allowed(websocket.headers.get("origin")):
         await websocket.close(code=CLOSE_FORBIDDEN, reason="Origin not allowed")
         return
-    await websocket.accept()
+    protocols = offered_protocols(websocket)
+    # A browser drops the connection when the server does not pick one of the protocols it offered.
+    await websocket.accept(subprotocol=SIGNAL_PROTOCOL if SIGNAL_PROTOCOL in protocols else None)
     if not ROOM_PATTERN.fullmatch(room) or role not in ROLES or (client and not CLIENT_PATTERN.fullmatch(client)):
         await websocket.close(
             code=CLOSE_BAD_REQUEST,
@@ -111,6 +135,17 @@ async def signal(websocket: WebSocket, room: str, role: str = "", client: str = 
             "?client id of 8-64 such characters",
         )
         return
+
+    token = session_token(protocols)
+    if role == "speaker" or token is not None:
+        try:
+            account = await run_in_threadpool(resolve_account, token)
+        except AccountError as error:
+            await websocket.close(code=CLOSE_UNAUTHORIZED, reason=error.detail)
+            return
+        if role == "speaker" and not account.has("caregiver_link"):
+            await websocket.close(code=CLOSE_PLAN_REQUIRED, reason=f"{FEATURE_NAMES['caregiver_link']} is part of Voicematics Pro.")
+            return
 
     members = rooms.get(room)
     if members is None and len(rooms) >= MAX_ROOMS:

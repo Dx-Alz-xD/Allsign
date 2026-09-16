@@ -4,13 +4,13 @@
  */
 
 export const SETTINGS_STORAGE_KEY = 'omnivoice:settings';
-/** Every key OmniVoice OS writes to browser storage starts with this, so export and erase can find them. */
+/** Every key Voicematics writes to browser storage starts with this, so export and erase can find them. */
 export const STORAGE_PREFIX = 'omnivoice:';
 
 export const TEXT_SCALE = { min: 100, max: 200, step: 10 } as const;
 export const SYSTEM_DEFAULT_DEVICE = 'default';
 /** Bump when the terms change materially so people are asked to acknowledge them again. */
-export const TERMS_VERSION = '2026-09-16';
+export const TERMS_VERSION = '2026-09-17';
 
 export interface DisplaySettings {
   /** null follows the operating system's contrast preference. */

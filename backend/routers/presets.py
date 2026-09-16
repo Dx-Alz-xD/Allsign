@@ -6,8 +6,9 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import ProfilePreset
-from ownership import Owner, get_owned_or_404, owned
+from ownership import Account, CurrentAccount, Owner, get_owned_or_404, owned, plan_required
 from schemas import ProfileMode, ProfilePresetInput, ProfilePresetOut
+from web_auth.plans import PROFILE_FEATURES
 
 router = APIRouter(prefix="/api/presets", tags=["profile-presets"])
 
@@ -16,6 +17,13 @@ DbSession = Annotated[Session, Depends(get_db)]
 
 def get_preset_or_404(db: Session, preset_id: str, owner: str | None) -> ProfilePreset:
     return get_owned_or_404(db, ProfilePreset, preset_id, owner, "Preset")
+
+
+def check_mode_allowed(account: Account, mode: str) -> None:
+    """Saving a preset for a profile needs the plan feature behind that profile."""
+    feature = PROFILE_FEATURES.get(mode)
+    if feature is not None and not account.has(feature):
+        raise plan_required(feature)
 
 
 @router.get("", response_model=list[ProfilePresetOut])
@@ -34,8 +42,9 @@ def list_presets(
 
 
 @router.post("", response_model=ProfilePresetOut, status_code=status.HTTP_201_CREATED)
-def create_preset(payload: ProfilePresetInput, db: DbSession, owner: Owner) -> ProfilePresetOut:
-    preset = ProfilePreset(**payload.model_dump(), userId=owner)
+def create_preset(payload: ProfilePresetInput, db: DbSession, account: CurrentAccount) -> ProfilePresetOut:
+    check_mode_allowed(account, payload.mode)
+    preset = ProfilePreset(**payload.model_dump(), userId=account.id)
     db.add(preset)
     db.commit()
     return ProfilePresetOut.model_validate(preset)
@@ -47,8 +56,9 @@ def get_preset(preset_id: str, db: DbSession, owner: Owner) -> ProfilePresetOut:
 
 
 @router.put("/{preset_id}", response_model=ProfilePresetOut)
-def replace_preset(preset_id: str, payload: ProfilePresetInput, db: DbSession, owner: Owner) -> ProfilePresetOut:
-    preset = get_preset_or_404(db, preset_id, owner)
+def replace_preset(preset_id: str, payload: ProfilePresetInput, db: DbSession, account: CurrentAccount) -> ProfilePresetOut:
+    preset = get_preset_or_404(db, preset_id, account.id)
+    check_mode_allowed(account, payload.mode)
     for field, value in payload.model_dump().items():
         setattr(preset, field, value)
     db.commit()

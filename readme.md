@@ -1,10 +1,10 @@
-# AllSign: OmniVoice OS
+# AllSign: Voicematics
 
-OmniVoice OS is an assistive speech desktop app for people who stutter, have aphasia or dysarthria, or speak with little voice. It measures the voice live, rebuilds garbled or out-of-order speech into grammatical sentences, types them into any app, turns hums and other small sounds into actions, and shares alerts and sentences with a caregiver's device.
+Voicematics is an assistive speech app for people who stutter, have aphasia or dysarthria, or speak with little voice. It measures the voice live, rebuilds garbled or out-of-order speech into grammatical sentences, types them into any app, turns hums and other small sounds into actions, and shares alerts and sentences with a caregiver's device.
 
-All processing is deterministic signal processing and rule-based grammar: no generative, predictive or computer-vision model is called anywhere in the app.
+Voicematics is one product, sold as a service: the desktop app (`frontend/`) signs in to a Voicematics account, the website (`website/`) sells and manages plans, and the backend (`backend/`) stores each account's data and enforces what its plan includes (see [Accounts, plans and licences](#accounts-plans-and-licences)). "OmniVoice OS" was the desktop app's codename; it survives only in internal identifiers such as `app://omnivoice`, `window.omnivoice`, `omnivoice.db` and the `omnivoice:` storage keys.
 
-The same backend also hosts the account, licence and mock billing service for the Voicematics website (`website/`, see [Voicematics accounts](#voicematics-accounts-and-licences) and [The Voicematics website](#the-voicematics-website)), and three language-model agents that run beside the speech path, never in it (see [Agents](#agents)).
+Everything that runs while someone speaks is deterministic signal processing and rule-based grammar: no generative, predictive or computer-vision model is in the speech path. Three language-model agents run beside it, only on request (see [Agents](#agents)).
 
 ## How the pieces fit
 
@@ -12,7 +12,7 @@ The same backend also hosts the account, licence and mock billing service for th
 |---|---|---|
 | `frontend/` (Next.js 14 in Electron) | Laptop 1 | The desktop shell, HUD, direct paste through nut.js, global shortcuts, and the WebRTC caregiver link |
 | `frontend/src/workers`, `frontend/src/worklets` | Laptop 2 | Web Workers and AudioWorklets: FFT, pitch, jitter/shimmer/HNR, LPC formants, speaking rate and blocks, trigger matching, DAF/FSF feedback, and the speech token stream |
-| `backend/` (FastAPI, SQLite) | Laptop 3 | NLTK CFG grammar engine, triggers, presets, session analytics, phoneme dictionary, the signalling relay, and Voicematics accounts |
+| `backend/` (FastAPI, SQLite) | Laptop 3 | NLTK CFG grammar engine, per-account triggers, presets, session analytics and phoneme targets, the phoneme dictionary, the signalling relay, and Voicematics accounts, plans and licences |
 | `backend/agents/` | Laptop 2 | The website assistant, the grammar-rule compiler and the clinical report writer (Gemini, Groq fallback) |
 | `website/` (Next.js 14) | Laptop 2 | The Voicematics landing page: live technology simulator, pricing and mock checkout, account dashboard, assistant widget |
 | `shared/types.ts` | everyone | The request and response contract, mirrored 1:1 by `backend/schemas.py` |
@@ -96,7 +96,8 @@ venv/Scripts/python.exe scripts/kaggle_sync.py
 | `DATABASE_URL` | `sqlite:///./data/omnivoice.db` | App data; relative paths resolve against `backend/` |
 | `WEB_AUTH_DATABASE_URL` | `sqlite:///./data/web_users.db` | Voicematics accounts and licences |
 | `AUTH_JWT_SECRET` | empty | Session signing key, 32+ characters; generated into `data/web_auth_jwt.key` when empty |
-| `AUTH_TOKEN_TTL_MINUTES` | `720` | Session length |
+| `AUTH_TOKEN_TTL_MINUTES` | `720` | Session token length; the desktop app renews it with its device token |
+| `REQUIRE_ACCOUNT` | `true` | The hosted service: app data, the caregiver relay (speaker side) and clinical reports need a signed-in account, and plans are enforced. `false` lets requests without a token use every feature, for a single-user install |
 | `CORS_ORIGINS`, `CORS_ORIGIN_REGEX` | `http://localhost:3000`, `app://…` and `http://127.0.0.1:*` | Origins allowed to call the API and open the relay |
 | `KAGGLE_USERNAME`, `KAGGLE_KEY` | empty | Only for `scripts/kaggle_sync.py` |
 | `GEMINI_API_KEY`, `GEMINI_MODEL` | empty, `gemini-flash-latest` | First provider for the agents |
@@ -105,7 +106,7 @@ venv/Scripts/python.exe scripts/kaggle_sync.py
 | `CUSTOM_GRAMMAR_PATH` | `./grammars/user_custom.cfg` | Where the grammar compiler appends validated rules |
 | `INSTALLER_DOWNLOAD_URL` | GitHub release asset | The installer link the website shows after checkout |
 
-`frontend/.env.local` (see `frontend/.env.example`): `NEXT_PUBLIC_BACKEND_URL` (default `http://127.0.0.1:8000`; prefer `127.0.0.1` over `localhost`, which resolves to IPv6 first and makes every new connection wait for a fallback), `NEXT_PUBLIC_STUN_SERVER`, `NEXT_PUBLIC_METERED_API_KEY`, `NEXT_PUBLIC_APP_VERSION`.
+`frontend/.env.local` (see `frontend/.env.example`): `NEXT_PUBLIC_BACKEND_URL` (default `http://127.0.0.1:8000`; prefer `127.0.0.1` over `localhost`, which resolves to IPv6 first and makes every new connection wait for a fallback), `NEXT_PUBLIC_STUN_SERVER`, `NEXT_PUBLIC_METERED_API_KEY`, `NEXT_PUBLIC_APP_VERSION`, `NEXT_PUBLIC_WEBSITE_URL` (default `http://localhost:3100`; where "See plans" opens).
 
 `website/.env.local` (see `website/.env.example`): `NEXT_PUBLIC_BACKEND_URL` (default `http://127.0.0.1:8000`).
 
@@ -131,16 +132,45 @@ The parse time shown is the server's own measurement, and it depends on whether 
 
 Sign photos are not bundled. Add them as described in [frontend/public/signs/README.md](frontend/public/signs/README.md); until then each word shows a "No photo yet" card rather than a guessed sign.
 
-## Voicematics accounts and licences
+## Accounts, plans and licences
 
-`backend/routers/auth.py`, stored in `backend/data/web_users.db` (tables `users` and `license_keys`):
+### Plans
+
+`backend/web_auth/plans.py` is the single source of truth; every account answer carries the account's `entitlements` (tier, features, trigger limit, expiry).
+
+| Feature | Free | Pro, Lifetime | Enforced by the backend |
+|---|---|---|---|
+| ClearVoice, Aphasia Mode, Sensory HUD, Pitch Demo | yes | yes | the grammar engine and word lookup are public |
+| Acoustic triggers | 1 | unlimited | `POST /api/triggers` answers 403 at the limit; over the limit (a lapsed plan) only the oldest triggers are matched |
+| Fluency Coach, Therapy Mode | no | yes | presets for those profiles and `/api/phonemes/targets` answer 403 |
+| Caregiver Link | watching only | sharing as the speaker | the relay closes a speaker without a session with 4401, on a plan without it with 4402 |
+| Session analytics | no | yes | every `/api/sessions` route answers 403 |
+| Clinical reports | no | yes | `POST /api/agent/generate-report` answers 403 |
+
+A cancelled monthly or annual plan keeps Pro until the end of its period; a lapsed one drops to Free on the next request. Saved data is never deleted by a downgrade.
+
+### The desktop app
+
+- **Sign-in:** the app opens on a sign-in screen. Signing in registers the computer (`POST /api/auth/devices`) and keeps the returned device token encrypted with the OS keychain through Electron `safeStorage` (`frontend/electron/account.ts`). The password is never stored.
+- **Staying signed in:** the device token is traded for fresh session tokens before they expire, and only works on the machine it was issued to.
+- **Plan changes:** the plan is re-read every 10 minutes and whenever the window regains focus, so an upgrade on the website shows up without a restart.
+- **Offline:** the last confirmed plan keeps working for 7 days.
+- **Licence binding:** `POST /api/license/verify` binds a paid licence to one computer (a SHA-256 of the machine id). On another computer the app runs on Free until the licence is moved there from Account.
+- **Gating:** every feature stays visible. Home lists them all; a Pro feature on Free shows what it does and how to unlock it instead of its controls.
+
+### Endpoints
+
+`backend/routers/auth.py`, stored in `backend/data/web_users.db` (tables `users`, `license_keys`, `subscriptions`, `device_sessions`):
 
 | Endpoint | Purpose |
 |---|---|
 | `POST /api/auth/signup` | Email and password. Stores an Argon2id hash, creates a free `VM-XXXX-YYYY-ZZZZ` licence key, returns a JWT session |
 | `POST /api/auth/login` | Checks the password, returns a JWT session and the licence status |
-| `GET /api/auth/me` | The signed-in account (`Authorization: Bearer <token>`) |
-| `POST /api/license/verify` | The desktop app's startup check of email and licence key; the first call with a `hardwareId` binds the key to that machine |
+| `GET /api/auth/me` | The signed-in account and its entitlements (`Authorization: Bearer <token>`) |
+| `POST /api/auth/me/delete` | Signed in, with the password again: erases the account and everything saved with it |
+| `POST /api/auth/devices`, `/devices/session`, `/devices/revoke` | Remember a computer, trade its device token for a session on that machine, sign it out |
+| `POST /api/license/verify` | The desktop app's check of email and licence key; the first call with a `hardwareId` binds the key to that machine |
+| `POST /api/license/deactivate` | Signed in: frees the licence from its machine |
 
 Security details:
 - **Passwords:** Argon2id with time cost 3, 64 MiB memory, parallelism 4, a 16-byte salt and a 32-byte hash (`backend/web_auth/passwords.py`). Hashes made with other parameters are upgraded at the next login.
@@ -149,8 +179,8 @@ Security details:
 - **Session tokens:** HS256, checked for issuer, audience and expiry.
 - **Hardware ids:** only their SHA-256 is stored. A bound key does not validate on another machine, or when the id is left out.
 - **Licence verification answers:** an unknown email, an unknown key and another account's key all get the same `invalid` answer.
-
-The desktop app does not call the licence check yet; `api.license.verify` in the frontend client is ready for it.
+- **Device tokens:** 256 random bits; only their SHA-256 and the machine's fingerprint are stored. Every failure of `/devices/session` gets the same 401. An account keeps at most 10 remembered computers.
+- **Relay tokens:** browsers cannot set headers on a WebSocket, so the session token travels as a `voicematics.token.<token>` subprotocol rather than in the URL, where access logs would record it.
 
 ## The Voicematics website
 
@@ -168,8 +198,8 @@ The desktop app does not call the licence check yet; `api.license.verify` in the
 | Agent | Endpoint | What the model does |
 |---|---|---|
 | `assistant.py` | `POST /api/agent/chat` | Answers onboarding questions with two deterministic tools: `simulate_dsp_delay(sample_rate)` (the capture worklet's latency arithmetic) and `recommend_settings(disfluency_type)` |
-| `cfg_compiler.py` | `POST /api/agent/compile-grammar` | Turns a plain-text correction request into NLTK CFG rules; every draft is checked with `nltk.CFG.fromstring()` and against the base grammar, and only validated rules are appended to `backend/grammars/user_custom.cfg` |
-| `telemetry_reporter.py` | `POST /api/agent/generate-report` | Writes the summary paragraph of a `ClinicalReport`; duration, stuttering reduction, the fatigue flag and the DAF recommendation are computed in Python and overwrite whatever the model returns |
+| `cfg_compiler.py` | `POST /api/agent/compile-grammar` | Turns a plain-text correction request into NLTK CFG rules; every draft is checked with `nltk.CFG.fromstring()` and against the base grammar, and only validated rules are appended to `backend/grammars/user_custom.cfg`. That file is shared by the whole server, so only a local-mode request saves to it; signed-in accounts get the validated rules back |
+| `telemetry_reporter.py` | `POST /api/agent/generate-report` (Pro; Analytics in the desktop app) | Writes the summary paragraph of a `ClinicalReport`; duration, stuttering reduction, the fatigue flag and the DAF recommendation are computed in Python and overwrite whatever the model returns |
 
 Gemini is tried first and Groq takes over when a Gemini call fails. With neither key set the endpoints answer 503 and the website widget shows "Offline". `GET /api/agent/status` reports the configured providers.
 

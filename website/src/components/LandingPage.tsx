@@ -33,7 +33,7 @@ function Page() {
         <Pricing onSubscribe={setCheckoutPlan} onCreateAccount={() => setAuthMode('signup')} onOpenDashboard={() => setDashboardOpen(true)} />
       </main>
       <footer className="border-t border-white/[0.06] px-6 py-10 text-center text-xs text-smoke">
-        Voicematics is the desktop distribution of OmniVoice OS. All speech processing runs on the device; this site talks only to your local backend for accounts and licences.
+        Voicematics analyzes your voice on your computer and never uploads audio. Your account, plan and the data you save live on the Voicematics server.
       </footer>
 
       <AuthModal mode={authMode} onClose={() => setAuthMode(null)} onDone={() => setAuthMode(null)} />

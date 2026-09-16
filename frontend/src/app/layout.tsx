@@ -24,7 +24,7 @@ const body = localFont({
 });
 
 export const metadata: Metadata = {
-  title: 'OmniVoice OS',
+  title: 'Voicematics',
   description: 'Assistive speech and acoustic desktop platform.',
 };
 

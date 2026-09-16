@@ -23,7 +23,7 @@ interface SettingsContextValue {
   updateAudio: (patch: Partial<AudioSettings>) => void;
   updateNetwork: (patch: Partial<NetworkSettings>) => void;
   updateLegal: (patch: Partial<LegalSettings>) => void;
-  /** Removes everything OmniVoice OS stored in this browser profile and returns to defaults. */
+  /** Removes everything Voicematics stored in this browser profile and returns to defaults. */
   eraseLocalData: () => string[];
 }
 

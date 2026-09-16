@@ -6,10 +6,11 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import SessionAnalytics
-from ownership import Owner, get_owned_or_404, owned
+from ownership import Owner, get_owned_or_404, owned, require_feature
 from schemas import ProfileMode, SessionAnalyticsInput, SessionAnalyticsOut, SessionSummary
 
-router = APIRouter(prefix="/api/sessions", tags=["session-analytics"])
+# Session history is a Pro feature: every route needs it, reading as well as recording.
+router = APIRouter(prefix="/api/sessions", tags=["session-analytics"], dependencies=[require_feature("analytics")])
 
 DbSession = Annotated[Session, Depends(get_db)]
 

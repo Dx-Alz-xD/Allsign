@@ -163,7 +163,7 @@ export function ShortcutSettingsPanel() {
   };
 
   if (inDesktopApp === false) {
-    return <p className="text-mist">Global shortcuts can be changed in the OmniVoice OS desktop app.</p>;
+    return <p className="text-mist">Global shortcuts can be changed in the Voicematics desktop app.</p>;
   }
 
   return (

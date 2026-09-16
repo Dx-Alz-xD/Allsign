@@ -144,3 +144,44 @@ def test_room_count_is_capped(client: "TestClient", monkeypatch: pytest.MonkeyPa
         assert closed.value.code == signalling.CLOSE_TRY_AGAIN_LATER
         with client.websocket_connect(url(room="FIRST", role="caregiver")) as joining:
             assert joining.receive_json()["peerPresent"] is True
+
+
+def test_the_same_device_takes_over_its_stale_connection(client: "TestClient") -> None:
+    device = url() + "&client=device-0001"
+    with client.websocket_connect(url(role="caregiver")) as caregiver:
+        caregiver.receive_json()
+        with client.websocket_connect(device) as stale:
+            stale.receive_json()
+            assert caregiver.receive_json() == {"type": "peer-joined", "role": "speaker"}
+            with client.websocket_connect(device) as fresh:
+                assert fresh.receive_json() == {"type": "joined", "room": "K7P3XQ", "role": "speaker", "peerPresent": True}
+                with pytest.raises(WebSocketDisconnect) as closed:
+                    stale.receive_json()
+                assert closed.value.code == signalling.CLOSE_REPLACED
+                # The caregiver hears a fresh join (so it renegotiates), never a leave.
+                assert caregiver.receive_json() == {"type": "peer-joined", "role": "speaker"}
+                fresh.send_json(OFFER)
+                assert caregiver.receive_json() == OFFER
+            assert caregiver.receive_json() == {"type": "peer-left", "role": "speaker"}
+        # The replaced socket leaving later changes nothing.
+        caregiver.send_json(ANSWER)
+        assert caregiver.receive_json() == {"type": "error", "message": "No speaker is in the room yet."}
+        assert set(signalling.rooms["K7P3XQ"]) == {"caregiver"}
+
+
+@pytest.mark.parametrize("second", ["&client=device-0002", ""])
+def test_another_device_cannot_take_a_role(client: "TestClient", second: str) -> None:
+    with client.websocket_connect(url() + "&client=device-0001") as speaker:
+        speaker.receive_json()
+        with client.websocket_connect(url() + second) as other:
+            with pytest.raises(WebSocketDisconnect) as closed:
+                other.receive_json()
+        assert closed.value.code == signalling.CLOSE_ROLE_TAKEN
+
+
+@pytest.mark.parametrize("client_id", ["short", "x" * 65, "bad id!!"])
+def test_malformed_client_ids_are_rejected(client: "TestClient", client_id: str) -> None:
+    with client.websocket_connect(url() + f"&client={client_id}") as socket:
+        with pytest.raises(WebSocketDisconnect) as closed:
+            socket.receive_json()
+    assert closed.value.code == signalling.CLOSE_BAD_REQUEST

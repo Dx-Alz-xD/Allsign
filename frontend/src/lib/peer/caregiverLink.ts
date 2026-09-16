@@ -1,15 +1,22 @@
 /**
  * Caregiver link: one WebRTC data channel between the speaker's app and a
  * caregiver's device, brokered by the backend's signalling relay
- * (`/ws/signal/{room}`). Telemetry and alerts travel peer-to-peer; the relay
- * only ever sees offer/answer/ICE.
+ * (`/ws/signal/{room}`). Telemetry, alerts and reconstructed sentences travel
+ * peer-to-peer; the relay only ever sees offer/answer/ICE.
  *
  * Either side may connect first. The speaker makes the offer as soon as both
  * are in the room; a ping/pong every two seconds measures the round trip.
+ * `send` is best effort (live telemetry); `broadcast` queues alerts and
+ * sentences in an Outbox until the channel opens.
+ *
+ * The signalling socket reconnects on its own, even while the data channel is
+ * up, and identifies the device with `clientId` so the relay lets it take its
+ * role back from a connection it has not yet noticed is gone.
  */
 
 import type { CaregiverMessage, CaregiverRole, SignalMessage } from '@shared/types';
 import type { PeerLinkState, PeerStatus } from '@/lib/hud/types';
+import { Outbox, type Delivery, type OutboxChannel } from '@/lib/peer/outbox';
 
 export type LinkStatus = 'idle' | 'signalling' | 'waiting' | 'connecting' | 'connected' | 'error' | 'closed';
 
@@ -23,6 +30,8 @@ export interface CaregiverLinkState {
   /** Messages sent / received over the data channel. */
   sent: number;
   received: number;
+  /** Alerts and sentences waiting for the data channel to open. */
+  queued: number;
 }
 
 export interface CaregiverLinkOptions {
@@ -31,6 +40,8 @@ export interface CaregiverLinkOptions {
   /** ws(s):// origin of the backend. */
   signalUrl: string;
   iceServers: RTCIceServer[];
+  /** Stable for this device across reconnects; 8-64 letters, digits, - or _. Generated when omitted. */
+  clientId?: string;
   onMessage: (message: CaregiverMessage) => void;
   onState: (state: CaregiverLinkState) => void;
 }
@@ -42,6 +53,8 @@ const PING_INTERVAL_MS = 2000;
 const RECONNECT_DELAY_MS = 3000;
 const MAX_RECONNECTS = 5;
 const CLOSE_ROLE_TAKEN = 4409;
+const CLOSE_REPLACED = 4410;
+const BUFFERED_LOW_BYTES = 256 * 1024;
 
 export const PEER_LABELS: Record<CaregiverRole, string> = {
   speaker: 'Speaker',
@@ -57,10 +70,14 @@ export class CaregiverLink {
   private reconnects = 0;
   private closedByUser = false;
   private pendingIce: RTCIceCandidateInit[] = [];
+  private readonly outbox = new Outbox();
+  private readonly clientId: string;
+  private sentCount = 0;
 
   private state: CaregiverLinkState;
 
   constructor(private readonly options: CaregiverLinkOptions) {
+    this.clientId = options.clientId ?? generateClientId();
     this.state = {
       status: 'idle',
       role: options.role,
@@ -70,6 +87,7 @@ export class CaregiverLink {
       error: null,
       sent: 0,
       received: 0,
+      queued: 0,
     };
   }
 
@@ -92,7 +110,9 @@ export class CaregiverLink {
     this.update({ status: 'signalling', error: null });
     let socket: WebSocket;
     try {
-      socket = new WebSocket(`${signalUrl}/ws/signal/${encodeURIComponent(room)}?role=${role}`);
+      socket = new WebSocket(
+        `${signalUrl}/ws/signal/${encodeURIComponent(room)}?role=${role}&client=${encodeURIComponent(this.clientId)}`,
+      );
     } catch (error) {
       this.update({ status: 'error', error: error instanceof Error ? error.message : String(error) });
       return;
@@ -101,7 +121,7 @@ export class CaregiverLink {
 
     socket.onopen = () => {
       this.reconnects = 0;
-      this.update({ status: 'waiting' });
+      if (!this.connected) this.update({ status: 'waiting' });
     };
     socket.onmessage = (event) => {
       let message: SignalMessage;
@@ -123,18 +143,22 @@ export class CaregiverLink {
         this.update({ status: 'error', error: `Someone is already connected as the ${role} in room ${room}.` });
         return;
       }
-      if (this.state.status === 'connected') return; // the data channel outlives the signalling socket
+      // A newer connection from this device took over; it owns the link now.
+      if (event.code === CLOSE_REPLACED) return;
+      // Keep signalling even while the data channel is up, so a later renegotiation can reach the peer.
       this.scheduleReconnect();
     };
   }
 
   private scheduleReconnect(): void {
     if (this.reconnects >= MAX_RECONNECTS) {
-      this.update({ status: 'error', error: 'Could not reach the signalling server. Check the backend URL in Settings.' });
+      const error = 'Could not reach the signalling server. Check the backend URL in Settings.';
+      // A working data channel carries on without the relay.
+      this.update(this.connected ? { error } : { status: 'error', error });
       return;
     }
     this.reconnects++;
-    this.update({ status: 'signalling', error: null });
+    if (!this.connected) this.update({ status: 'signalling', error: null });
     this.reconnectTimer = window.setTimeout(() => this.openSocket(), RECONNECT_DELAY_MS);
   }
 
@@ -144,13 +168,14 @@ export class CaregiverLink {
 
   private async handleSignal(message: SignalMessage): Promise<void> {
     switch (message.type) {
+      // An open channel survives a signalling reconnect on either side, so only offer when there is none.
       case 'joined':
-        this.update({ peerPresent: message.peerPresent });
-        if (message.peerPresent && this.options.role === 'speaker') await this.offer();
+        this.update({ peerPresent: message.peerPresent, error: null });
+        if (message.peerPresent && this.options.role === 'speaker' && !this.connected) await this.offer();
         break;
       case 'peer-joined':
         this.update({ peerPresent: true });
-        if (this.options.role === 'speaker') await this.offer();
+        if (this.options.role === 'speaker' && !this.connected) await this.offer();
         break;
       case 'peer-left':
         this.update({ peerPresent: false, roundTripMs: null });
@@ -222,10 +247,13 @@ export class CaregiverLink {
 
   private attachChannel(channel: RTCDataChannel): void {
     this.channel = channel;
+    channel.bufferedAmountLowThreshold = BUFFERED_LOW_BYTES;
     channel.onopen = () => {
       this.update({ status: 'connected', error: null });
       this.startPing();
+      this.flushOutbox();
     };
+    channel.onbufferedamountlow = () => this.flushOutbox();
     channel.onclose = () => {
       if (this.channel === channel) this.channel = null;
       this.stopPing();
@@ -285,11 +313,43 @@ export class CaregiverLink {
     return true;
   }
 
-  /** Sends a telemetry or alert message; false when the channel is not open. */
+  /** Best effort, for live telemetry: false when the channel is not open. */
   send(message: CaregiverMessage): boolean {
     const sent = this.sendWire(message);
-    if (sent) this.update({ sent: this.state.sent + 1 });
+    if (sent) this.update({ sent: ++this.sentCount });
     return sent;
+  }
+
+  /** Alerts and sentences: sent in order now, or queued until the channel opens. */
+  broadcast(message: CaregiverMessage): Delivery {
+    const delivery = this.outbox.deliver(JSON.stringify(message), this.countingChannel());
+    this.update({ sent: this.sentCount, queued: this.outbox.size });
+    return delivery;
+  }
+
+  private flushOutbox(): void {
+    const channel = this.countingChannel();
+    if (!channel || this.outbox.size === 0) return;
+    this.outbox.flush(channel);
+    this.update({ sent: this.sentCount, queued: this.outbox.size });
+  }
+
+  /** The data channel, counting what the outbox sends through it. */
+  private countingChannel(): OutboxChannel | null {
+    const channel = this.channel;
+    if (!channel) return null;
+    return {
+      get readyState() {
+        return channel.readyState;
+      },
+      get bufferedAmount() {
+        return channel.bufferedAmount;
+      },
+      send: (data: string) => {
+        channel.send(data);
+        this.sentCount++;
+      },
+    };
   }
 
   get connected(): boolean {
@@ -312,7 +372,8 @@ export class CaregiverLink {
     this.teardownConnection();
     this.socket?.close();
     this.socket = null;
-    this.update({ status: 'closed', peerPresent: false, roundTripMs: null });
+    this.outbox.clear();
+    this.update({ status: 'closed', peerPresent: false, roundTripMs: null, queued: 0 });
   }
 }
 
@@ -328,6 +389,14 @@ export function toPeerLinkState(state: CaregiverLinkState | null): PeerLinkState
 export function generateRoomCode(): string {
   const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const bytes = new Uint8Array(6);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join('');
+}
+
+/** 24 characters from the same alphabet; the relay accepts 8-64 letters, digits, - or _. */
+export function generateClientId(): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = new Uint8Array(24);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join('');
 }

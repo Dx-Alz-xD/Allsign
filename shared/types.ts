@@ -190,9 +190,22 @@ export interface CaregiverAlert {
   durationMs?: number;
 }
 
+// Where a reconstructed sentence came from: typed text, opt-in system dictation, or the Pitch Mode demo script.
+export type SpeechSource = 'manual' | 'system-dictation' | 'demo';
+
+// A reconstructed sentence shared with the caregiver as soon as the grammar engine returns it.
+export interface CaregiverTranscript {
+  id: string;
+  source: SpeechSource;
+  grammar: GrammarResponse;
+  roundTripMs: number; // speech.worker request start to parsed response
+  timestamp: number; // epoch ms
+}
+
 export type CaregiverMessage =
   | { type: 'telemetry'; telemetry: AudioTelemetryFrame; fluency: FluencyMetrics; latencyMs: number }
-  | { type: 'alert'; alert: CaregiverAlert };
+  | { type: 'alert'; alert: CaregiverAlert }
+  | { type: 'transcript'; transcript: CaregiverTranscript };
 
 // Signalling relay (WebSocket /ws/signal/{room}?role=speaker|caregiver). The relay forwards offer, answer
 // and ice to the other role and sends the rest itself. Close code 4409: that role is already taken in the room.

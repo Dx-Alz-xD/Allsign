@@ -10,8 +10,10 @@
  *
  * A vocal block is a voicing gap inside an utterance: after voiced speech, no
  * voicing for at least `blockMinMs`. It stays "ongoing" until voicing resumes
- * or `blockMaxMs` passes, at which point the utterance is over. This is a
- * rule on timing alone and will also count some long mid-sentence pauses.
+ * or `blockMaxMs` passes. In the second case the utterance is over and the
+ * gap was a pause, so the block is withdrawn from `blockCount` and
+ * `blockedMs` again. This is a rule on timing alone and will also count some
+ * long mid-sentence pauses.
  */
 
 import type { CyclePacket, CyclePortMessage } from '@/workers/audio.worker';
@@ -117,6 +119,10 @@ class CadenceAnalyzer {
   private blockStartHop = -1;
   private blockOngoing = false;
   private lastBlockMs = 0;
+  /** Length of the last block that voicing ended; shown again when an ongoing block is withdrawn. */
+  private confirmedBlockMs = 0;
+  /** What the ongoing block has added to `blockedMs` so far. */
+  private ongoingBlockedMs = 0;
   private blockCount = 0;
   private blockedMs = 0;
   private speakingMs = 0;
@@ -147,6 +153,8 @@ class CadenceAnalyzer {
     this.blockStartHop = -1;
     this.blockOngoing = false;
     this.lastBlockMs = 0;
+    this.confirmedBlockMs = 0;
+    this.ongoingBlockedMs = 0;
     this.blockCount = 0;
     this.blockedMs = 0;
     this.speakingMs = 0;
@@ -230,6 +238,8 @@ class CadenceAnalyzer {
       if (this.blockOngoing) {
         this.blockOngoing = false;
         this.lastBlockMs = (hop - this.blockStartHop) * hopMs;
+        this.confirmedBlockMs = this.lastBlockMs;
+        this.ongoingBlockedMs = 0;
       }
       this.blockStartHop = -1;
       this.lastVoicedHop = hop;
@@ -241,10 +251,13 @@ class CadenceAnalyzer {
 
     const gapMs = (hop - this.lastVoicedHop) * hopMs;
     if (gapMs > blockMaxMs) {
-      // The utterance is over; whatever gap this was, it is a pause now.
+      // The utterance is over, so the gap was a pause and not a block.
       if (this.blockOngoing) {
         this.blockOngoing = false;
-        this.lastBlockMs = blockMaxMs;
+        this.blockCount--;
+        this.blockedMs -= this.ongoingBlockedMs;
+        this.ongoingBlockedMs = 0;
+        this.lastBlockMs = this.confirmedBlockMs;
       }
       this.utteranceVoicedMs = 0;
       return;
@@ -257,9 +270,13 @@ class CadenceAnalyzer {
       this.blockStartHop = this.lastVoicedHop + 1;
       this.blockCount++;
       // The first blockMinMs already elapsed inside this gap.
-      this.blockedMs += gapMs - hopMs;
+      this.ongoingBlockedMs = gapMs - hopMs;
+      this.blockedMs += this.ongoingBlockedMs;
     }
-    if (this.blockOngoing) this.blockedMs += hopMs;
+    if (this.blockOngoing) {
+      this.blockedMs += hopMs;
+      this.ongoingBlockedMs += hopMs;
+    }
   }
 
   private payload(): CadencePayload {

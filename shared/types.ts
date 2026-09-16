@@ -1,20 +1,28 @@
 export interface LandmarkFrame {
   timestamp: number;
-  landmarks: number[]; // 132-float normalized vector
+  landmarks: number[]; // 132-float normalized array (hands + face)
+}
+
+export interface DTWTemplate {
+  gloss: string;
+  category: string;
+  vectorSequence: number[][]; // Array of 132-float vectors
 }
 
 export interface PredictionResult {
   gloss: string;
-  confidence: number;
-  raw_sequence: string[];
+  dtwDistance: number;
+  confidence: number; // Computed from margin distance ratio
+  rawSequence: string[];
 }
 
-export interface GrammarRequest {
+export interface RuleGrammarRequest {
   glosses: string[];
-  context?: string;
+  sourceLang: string;
+  targetLang: string;
 }
 
-export interface GrammarResponse {
-  translatedText: string;
-  confidence: number;
+export interface RuleGrammarResponse {
+  formattedSentence: string;
+  reorderedGlosses: string[];
 }

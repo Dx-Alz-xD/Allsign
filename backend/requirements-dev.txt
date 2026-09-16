@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest>=8.0
+# starlette.testclient prefers httpx2 and warns when it falls back to httpx.
+httpx2>=2.13

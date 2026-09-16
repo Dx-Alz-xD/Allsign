@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Optional
 
 class GrammarRequestSchema(BaseModel):
@@ -14,7 +14,7 @@ class GrammarResponseSchema(BaseModel):
 
 class AcousticTriggerBase(BaseModel):
     name: str
-    spectralFingerprint: List[float] = Field(..., min_items=128, max_items=128)
+    spectralFingerprint: List[float] = Field(..., min_length=128, max_length=128)
     mappedPhrase: str
     targetAction: str = "DIRECT_PASTE"
     threshold: float = 0.85
@@ -23,10 +23,9 @@ class AcousticTriggerCreate(AcousticTriggerBase):
     pass
 
 class AcousticTriggerOut(AcousticTriggerBase):
-    id: str
+    model_config = ConfigDict(from_attributes=True)
 
-    class Config:
-        from_attributes = True
+    id: str
 
 class SessionAnalyticsSchema(BaseModel):
     wpm: float

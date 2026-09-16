@@ -1,30 +1,19 @@
+import gc
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Literal
 
-import nltk
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
+import grammar_engine
 from config import get_settings
 
-LATENCY_BUDGET_MS = 15.0
-
-# Fixed probe for timing the CFG chart parser; grammar_engine.py owns the production rules.
-PROBE_GRAMMAR = nltk.CFG.fromstring(
-    """
-    S -> NP VP
-    NP -> Det N | Pron
-    VP -> V NP | V
-    Det -> 'the' | 'a'
-    N -> 'message' | 'word'
-    Pron -> 'i' | 'you'
-    V -> 'need' | 'send'
-    """
-)
-PROBE_TOKENS = ["i", "need", "the", "message"]
+# Garbled SOV probe so the healthcheck exercises normalization, parsing, ranking and reordering.
+PROBE_TOKENS = ["um", "me", "w-w-water", "want"]
+PROBE_EXPECTED = "I want water."
 
 settings = get_settings()
 
@@ -48,13 +37,11 @@ class HealthResponse(BaseModel):
     astEngine: AstEngineHealth
 
 
-def time_probe_parse(parser: nltk.ChartParser) -> float:
-    start = time.perf_counter()
-    tree = next(parser.parse(PROBE_TOKENS), None)
-    elapsed_ms = (time.perf_counter() - start) * 1000
-    if tree is None:
-        raise RuntimeError("AST probe grammar produced no parse tree")
-    return elapsed_ms
+def time_probe_parse() -> float:
+    result = grammar_engine.translate(PROBE_TOKENS)
+    if result.formatted_text != PROBE_EXPECTED:
+        raise RuntimeError(f"AST engine probe returned {result.formatted_text!r}, expected {PROBE_EXPECTED!r}")
+    return result.latency_ms
 
 
 def uptime_seconds(request: Request) -> float:
@@ -65,9 +52,11 @@ def uptime_seconds(request: Request) -> float:
 async def lifespan(app: FastAPI):
     app.state.started_at = datetime.now(timezone.utc)
     app.state.started_monotonic = time.monotonic()
-    app.state.probe_parser = nltk.ChartParser(PROBE_GRAMMAR)
     # Warm-up parse: fails startup on a broken grammar and keeps the first healthcheck from reading cold.
-    time_probe_parse(app.state.probe_parser)
+    time_probe_parse()
+    # Exempt the startup heap from GC scans; full collections over it stalled parses by 10-30ms.
+    gc.collect()
+    gc.freeze()
     yield
 
 
@@ -81,6 +70,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(grammar_engine.router)
+
 
 @app.get("/health/live", response_model=LiveHealth)
 def health_live(request: Request) -> LiveHealth:
@@ -93,15 +84,15 @@ def health_live(request: Request) -> LiveHealth:
 
 @app.get("/health", response_model=HealthResponse)
 def health(request: Request) -> HealthResponse:
-    latency_ms = time_probe_parse(request.app.state.probe_parser)
-    within_budget = latency_ms <= LATENCY_BUDGET_MS
+    latency_ms = time_probe_parse()
+    within_budget = latency_ms <= grammar_engine.LATENCY_BUDGET_MS
     return HealthResponse(
         status="ok" if within_budget else "degraded",
         uptimeSeconds=uptime_seconds(request),
         startedAt=request.app.state.started_at,
         astEngine=AstEngineHealth(
             latencyMs=round(latency_ms, 3),
-            budgetMs=LATENCY_BUDGET_MS,
+            budgetMs=grammar_engine.LATENCY_BUDGET_MS,
             withinBudget=within_budget,
         ),
     )

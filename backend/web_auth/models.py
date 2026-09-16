@@ -49,7 +49,7 @@ class LicenseKey(WebBase):
 
 
 BillingPeriod = Literal["monthly", "annual", "lifetime"]
-SubscriptionStatus = Literal["active", "replaced", "cancelled"]
+SubscriptionStatus = Literal["active", "replaced", "cancelled", "expired"]
 
 
 class Subscription(WebBase):

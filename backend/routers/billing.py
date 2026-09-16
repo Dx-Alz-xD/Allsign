@@ -4,6 +4,7 @@
 - POST /api/billing/checkout       signed in: "pay" with a test card, record the subscription, upgrade the
                                    account's plan tier and issue a licence key for that tier
 - GET  /api/billing/subscription   signed in: the current subscription, or null on the free plan
+- POST /api/billing/cancel         signed in: stop renewing; access lasts until the period ends
 
 No payment processor is involved. The card number must pass a Luhn check and the expiry must be in the
 future; Stripe's decline test number is declined so the website can show that path. Only the card brand and
@@ -20,11 +21,12 @@ from sqlalchemy.orm import Session
 
 from config import get_settings
 from models import utcnow
-from routers.auth import license_info, signed_in_user
+from routers.auth import entitlements, license_info, signed_in_user
 from schemas import CardBrand, CardDetails, CheckoutRequest, CheckoutResponse, PricingPlan, SubscriptionOut, WebUserOut
 from web_auth.database import get_web_db
 from web_auth.licenses import generate_license_key
 from web_auth.models import LicenseKey, Subscription, WebUser
+from web_auth.plans import settle_plan
 
 router = APIRouter(prefix="/api/billing", tags=["web-billing"])
 
@@ -43,7 +45,7 @@ PLANS: list[PricingPlan] = [
         name="Free",
         priceCents=0,
         billingPeriod=None,
-        features=["ClearVoice grammar reconstruction", "Sensory HUD", "One acoustic trigger", "Community support"],
+        features=["ClearVoice grammar and direct paste", "Aphasia word finder", "Sensory HUD", "One acoustic trigger"],
     ),
     PricingPlan(
         id="pro_monthly",
@@ -51,7 +53,7 @@ PLANS: list[PricingPlan] = [
         name="Pro Monthly",
         priceCents=1499,
         billingPeriod="monthly",
-        features=["Everything in Free", "DAF / FSF Fluency Coach", "Unlimited triggers", "Caregiver link", "Session analytics"],
+        features=["Everything in Free", "DAF / FSF Fluency Coach", "Therapy vowel plane", "Unlimited triggers", "Caregiver link", "Session analytics and clinical reports"],
     ),
     PricingPlan(
         id="pro_annual",
@@ -120,11 +122,8 @@ def period_end(billing_period: str):
 
 
 def current_subscription(db: Session, user: WebUser) -> Subscription | None:
-    return db.scalar(
-        select(Subscription)
-        .where(Subscription.userId == user.id, Subscription.status == "active")
-        .order_by(Subscription.createdAt.desc())
-    )
+    _, subscription = settle_plan(db, user)
+    return subscription
 
 
 @router.get("/plans", response_model=list[PricingPlan])
@@ -138,10 +137,22 @@ def subscription(user: SignedIn, db: WebDb) -> SubscriptionOut | None:
     return SubscriptionOut.model_validate(record) if record else None
 
 
+@router.post("/cancel", response_model=SubscriptionOut)
+def cancel(user: SignedIn, db: WebDb) -> SubscriptionOut:
+    subscription = current_subscription(db, user)
+    if subscription is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="There is no subscription to cancel.")
+    if subscription.billingPeriod == "lifetime":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Lifetime access does not renew, so there is nothing to cancel.")
+    subscription.status = "cancelled"
+    db.commit()
+    return SubscriptionOut.model_validate(subscription)
+
+
 @router.post("/checkout", response_model=CheckoutResponse, status_code=status.HTTP_201_CREATED)
 def checkout(payload: CheckoutRequest, user: SignedIn, db: WebDb) -> CheckoutResponse:
     plan = PLAN_BY_ID[payload.planId]
-    if user.planTier == "lifetime":
+    if settle_plan(db, user)[0] == "lifetime":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="This account already has lifetime access.")
     brand, last4 = validate_card(payload.card)
 
@@ -178,6 +189,7 @@ def checkout(payload: CheckoutRequest, user: SignedIn, db: WebDb) -> CheckoutRes
             subscription=SubscriptionOut.model_validate(record),
             license=license_info(user, key),
             user=WebUserOut.model_validate(user),
+            entitlements=entitlements(db, user),
             downloadUrl=get_settings().INSTALLER_DOWNLOAD_URL,
         )
     raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not allocate a license key.")

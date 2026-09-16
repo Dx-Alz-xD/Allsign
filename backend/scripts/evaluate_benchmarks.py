@@ -774,6 +774,7 @@ def time_api_round_trips(
     from fastapi.testclient import TestClient
 
     import main
+    from ownership import current_owner
     from routers.triggers import profile_cache
 
     sessions = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
@@ -783,8 +784,10 @@ def time_api_round_trips(
             yield session
 
     with Session(engine) as session:
-        trigger_ids = itertools.cycle(list(session.scalars(select(AcousticTrigger.id).limit(200))))
-        fingerprint = session.scalars(select(AcousticTrigger.spectralFingerprint).limit(1)).one()
+        # Requests run as one benchmark account: the API only ranks and lists the caller's own triggers.
+        owner_id = session.scalars(select(AcousticTrigger.userId).where(AcousticTrigger.userId.is_not(None)).limit(1)).one()
+        trigger_ids = itertools.cycle(list(session.scalars(select(AcousticTrigger.id).where(AcousticTrigger.userId == owner_id).limit(200))))
+        fingerprint = session.scalars(select(AcousticTrigger.spectralFingerprint).where(AcousticTrigger.userId == owner_id).limit(1)).one()
         # The earliest nodes lie on the most frequent words, so these are the busiest prefixes to look up.
         prefixes = itertools.cycle(list(session.scalars(
             select(PhonemeTrieNode.path)
@@ -799,6 +802,7 @@ def time_api_round_trips(
 
     original_init_db = main.init_db
     main.app.dependency_overrides[get_db] = benchmark_db
+    main.app.dependency_overrides[current_owner] = lambda: owner_id
     # The lifespan would otherwise create tables in the app's real database.
     main.init_db = lambda: init_db(engine)
     try:
@@ -816,7 +820,7 @@ def time_api_round_trips(
                  lambda: client.get(f"/api/triggers/{next(trigger_ids)}")),
                 ("GET /api/triggers?limit=100", "100 triggers, fingerprints included",
                  lambda: client.get("/api/triggers", params={"limit": 100})),
-                (MATCH_REQUEST, f"rank {scale.trigger_library} stored triggers (cached profiles), top 3",
+                (MATCH_REQUEST, f"rank one account's share of {scale.trigger_library} stored triggers (cached profiles), top 3",
                  match_request),
                 ("POST /api/triggers", "validate 128 finite floats, insert, commit",
                  lambda: client.post("/api/triggers", json={
@@ -839,6 +843,7 @@ def time_api_round_trips(
     finally:
         main.init_db = original_init_db
         main.app.dependency_overrides.pop(get_db, None)
+        main.app.dependency_overrides.pop(current_owner, None)
         profile_cache.clear()
 
 

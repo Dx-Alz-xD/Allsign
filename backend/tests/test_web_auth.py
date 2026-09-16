@@ -173,7 +173,9 @@ def test_signup_creates_an_account_with_a_free_license(client: "TestClient") -> 
     response = signup(client)
     assert response.status_code == 201, response.text
     body = response.json()
-    assert set(body) == {"token", "tokenType", "expiresAt", "user", "license"}
+    assert set(body) == {"token", "tokenType", "expiresAt", "user", "license", "entitlements"}
+    assert body["entitlements"]["tier"] == "free" and body["entitlements"]["triggerLimit"] == 1
+    assert "fluency" not in body["entitlements"]["features"]
     assert body["tokenType"] == "bearer"
     user, license_ = body["user"], body["license"]
     assert (user["email"], user["planTier"], user["isActive"]) == ("ada@example.com", "free", True)
@@ -325,7 +327,10 @@ def test_invalid_combinations_all_look_the_same(client: "TestClient") -> None:
     ]
     for answer in answers:
         assert answer.pop("checkedAt")
-        assert answer == {"valid": False, "status": "invalid", "tier": None, "hardwareBound": False, "activatedAt": None}
+        assert answer == {
+            "valid": False, "status": "invalid", "tier": None, "hardwareBound": False, "activatedAt": None,
+            "features": [], "triggerLimit": None, "expiresAt": None,
+        }
     # None of those attempts bound anything.
     assert verify(client, "bob@example.com", bob_key, hardware=None)["hardwareBound"] is False
 
@@ -339,12 +344,14 @@ def test_disabled_accounts_and_replaced_keys_are_inactive(client: "TestClient") 
         session.add(LicenseKey(keyString=replacement, userId=stored.id, tier="pro"))
         session.flush()
         stored.licenseKey = replacement
+        stored.planTier = "pro"
 
     for email, key in [("off@example.com", disabled_key), ("ada@example.com", old_key)]:
         result = verify(client, email, key)
         assert (result["valid"], result["status"], result["hardwareBound"]) == (False, "inactive", False)
     current = verify(client, "ada@example.com", replacement)
     assert (current["valid"], current["tier"]) == (True, "pro")
+    assert "fluency" in current["features"] and current["triggerLimit"] is None
 
 
 @pytest.mark.parametrize(

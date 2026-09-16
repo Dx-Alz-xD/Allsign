@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import CustomPhonemeTarget, Phoneme, PhonemeTrieNode, Pronunciation
+from ownership import Owner, get_owned_or_404, owned
 from schemas import (
     PhonemeLookupBranch,
     PhonemeLookupResponse,
@@ -23,11 +24,8 @@ PREFIX_SEPARATOR = re.compile(r"[\s,]+")
 ARPABET_SYMBOL = re.compile(r"[A-Z]{1,3}")
 
 
-def get_target_or_404(db: Session, target_id: str) -> CustomPhonemeTarget:
-    target = db.get(CustomPhonemeTarget, target_id)
-    if target is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Phoneme target '{target_id}' not found")
-    return target
+def get_target_or_404(db: Session, target_id: str, owner: str | None) -> CustomPhonemeTarget:
+    return get_owned_or_404(db, CustomPhonemeTarget, target_id, owner, "Phoneme target")
 
 
 def invalid_prefix(detail: str) -> HTTPException:
@@ -49,22 +47,23 @@ def normalise_prefix(prefix: str, inventory: set[str]) -> list[str]:
 
 
 @router.get("/targets", response_model=list[PhonemeTargetOut])
-def list_targets(db: DbSession) -> list[PhonemeTargetOut]:
-    targets = db.scalars(select(CustomPhonemeTarget).order_by(CustomPhonemeTarget.createdAt, CustomPhonemeTarget.id))
+def list_targets(db: DbSession, owner: Owner) -> list[PhonemeTargetOut]:
+    query = owned(select(CustomPhonemeTarget), CustomPhonemeTarget, owner)
+    targets = db.scalars(query.order_by(CustomPhonemeTarget.createdAt, CustomPhonemeTarget.id))
     return [PhonemeTargetOut.model_validate(target) for target in targets]
 
 
 @router.post("/targets", response_model=PhonemeTargetOut, status_code=status.HTTP_201_CREATED)
-def create_target(payload: PhonemeTargetInput, db: DbSession) -> PhonemeTargetOut:
-    target = CustomPhonemeTarget(**payload.model_dump())
+def create_target(payload: PhonemeTargetInput, db: DbSession, owner: Owner) -> PhonemeTargetOut:
+    target = CustomPhonemeTarget(**payload.model_dump(), userId=owner)
     db.add(target)
     db.commit()
     return PhonemeTargetOut.model_validate(target)
 
 
 @router.delete("/targets/{target_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_target(target_id: str, db: DbSession) -> Response:
-    db.delete(get_target_or_404(db, target_id))
+def delete_target(target_id: str, db: DbSession, owner: Owner) -> Response:
+    db.delete(get_target_or_404(db, target_id, owner))
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

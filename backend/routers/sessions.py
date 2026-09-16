@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import SessionAnalytics
+from ownership import Owner, get_owned_or_404, owned
 from schemas import ProfileMode, SessionAnalyticsInput, SessionAnalyticsOut, SessionSummary
 
 router = APIRouter(prefix="/api/sessions", tags=["session-analytics"])
@@ -13,11 +14,8 @@ router = APIRouter(prefix="/api/sessions", tags=["session-analytics"])
 DbSession = Annotated[Session, Depends(get_db)]
 
 
-def get_session_or_404(db: Session, session_id: str) -> SessionAnalytics:
-    record = db.get(SessionAnalytics, session_id)
-    if record is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Session '{session_id}' not found")
-    return record
+def get_session_or_404(db: Session, session_id: str, owner: str | None) -> SessionAnalytics:
+    return get_owned_or_404(db, SessionAnalytics, session_id, owner, "Session")
 
 
 def weighted_mean(weighted_sum: float, weight: float, fallback: float) -> float:
@@ -27,11 +25,12 @@ def weighted_mean(weighted_sum: float, weight: float, fallback: float) -> float:
 @router.get("", response_model=list[SessionAnalyticsOut])
 def list_sessions(
     db: DbSession,
+    owner: Owner,
     profileMode: ProfileMode | None = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[SessionAnalyticsOut]:
-    query = select(SessionAnalytics).order_by(SessionAnalytics.recordedAt.desc(), SessionAnalytics.id)
+    query = owned(select(SessionAnalytics), SessionAnalytics, owner).order_by(SessionAnalytics.recordedAt.desc(), SessionAnalytics.id)
     if profileMode is not None:
         query = query.where(SessionAnalytics.profileMode == profileMode)
     records = db.scalars(query.limit(limit).offset(offset))
@@ -39,7 +38,7 @@ def list_sessions(
 
 
 @router.get("/summary", response_model=SessionSummary)
-def summarize_sessions(db: DbSession, profileMode: ProfileMode | None = None) -> SessionSummary:
+def summarize_sessions(db: DbSession, owner: Owner, profileMode: ProfileMode | None = None) -> SessionSummary:
     """Totals over all recorded sessions. A long session counts for more than a short one in the averages."""
     duration = SessionAnalytics.sessionDurationSeconds
     blocks = SessionAnalytics.stutterCount
@@ -55,6 +54,7 @@ def summarize_sessions(db: DbSession, profileMode: ProfileMode | None = None) ->
         func.min(SessionAnalytics.recordedAt).label("first"),
         func.max(SessionAnalytics.recordedAt).label("last"),
     )
+    query = owned(query, SessionAnalytics, owner)
     if profileMode is not None:
         query = query.where(SessionAnalytics.profileMode == profileMode)
     row = db.execute(query).one()
@@ -73,20 +73,20 @@ def summarize_sessions(db: DbSession, profileMode: ProfileMode | None = None) ->
 
 
 @router.post("", response_model=SessionAnalyticsOut, status_code=status.HTTP_201_CREATED)
-def record_session(payload: SessionAnalyticsInput, db: DbSession) -> SessionAnalyticsOut:
-    record = SessionAnalytics(**payload.model_dump())
+def record_session(payload: SessionAnalyticsInput, db: DbSession, owner: Owner) -> SessionAnalyticsOut:
+    record = SessionAnalytics(**payload.model_dump(), userId=owner)
     db.add(record)
     db.commit()
     return SessionAnalyticsOut.model_validate(record)
 
 
 @router.get("/{session_id}", response_model=SessionAnalyticsOut)
-def get_session(session_id: str, db: DbSession) -> SessionAnalyticsOut:
-    return SessionAnalyticsOut.model_validate(get_session_or_404(db, session_id))
+def get_session(session_id: str, db: DbSession, owner: Owner) -> SessionAnalyticsOut:
+    return SessionAnalyticsOut.model_validate(get_session_or_404(db, session_id, owner))
 
 
 @router.delete("/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_session(session_id: str, db: DbSession) -> Response:
-    db.delete(get_session_or_404(db, session_id))
+def delete_session(session_id: str, db: DbSession, owner: Owner) -> Response:
+    db.delete(get_session_or_404(db, session_id, owner))
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)

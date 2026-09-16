@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 import acoustic_matcher as am
 from database import get_db
 from models import AcousticTrigger
+from ownership import Owner, get_owned_or_404, owned
 from schemas import (
     AcousticMatchCandidate,
     AcousticMatchRequest,
@@ -31,35 +32,38 @@ class TriggerProfileCache:
     """Spectral profiles of stored triggers, so a match request does not re-profile every fingerprint.
 
     Writes through this router invalidate entries directly. Every insert, edit or delete also changes the
-    trigger count or the newest `updatedAt`, so an unchanged pair means the cached templates are current
-    and the per-trigger query is skipped. Profiles are per process, so run the API with a single worker.
+    trigger count or the newest `updatedAt` of that owner's set, so an unchanged pair means the cached
+    templates are current and the per-trigger query is skipped. Templates are kept per owner (an account,
+    or the unowned local set); profiles are per process, so run the API with a single worker.
     """
 
     def __init__(self) -> None:
         self._profiles: dict[str, tuple[datetime, am.SpectralProfile]] = {}
-        self._templates: tuple[am.TriggerTemplate, ...] = ()
-        self._snapshot: tuple | None = None
+        self._templates: dict[str | None, tuple[am.TriggerTemplate, ...]] = {}
+        self._snapshots: dict[str | None, tuple] = {}
         self._lock = threading.Lock()
 
     def clear(self) -> None:
         with self._lock:
             self._profiles.clear()
-            self._templates = ()
-            self._snapshot = None
+            self._templates.clear()
+            self._snapshots.clear()
 
     def invalidate(self, trigger_id: str) -> None:
         with self._lock:
             self._profiles.pop(trigger_id, None)
-            self._snapshot = None
+            self._snapshots.clear()
 
-    def templates(self, db: Session) -> tuple[am.TriggerTemplate, ...]:
-        snapshot = tuple(db.execute(select(func.count(AcousticTrigger.id), func.max(AcousticTrigger.updatedAt))).one())
+    def templates(self, db: Session, owner: str | None) -> tuple[am.TriggerTemplate, ...]:
+        snapshot = tuple(
+            db.execute(owned(select(func.count(AcousticTrigger.id), func.max(AcousticTrigger.updatedAt)), AcousticTrigger, owner)).one()
+        )
         with self._lock:
-            if snapshot == self._snapshot:
-                return self._templates
+            if snapshot == self._snapshots.get(owner):
+                return self._templates[owner]
             # A write landing after the snapshot above only makes the next request refresh again.
             rows = db.execute(
-                select(AcousticTrigger.id, AcousticTrigger.updatedAt, AcousticTrigger.threshold).order_by(
+                owned(select(AcousticTrigger.id, AcousticTrigger.updatedAt, AcousticTrigger.threshold), AcousticTrigger, owner).order_by(
                     AcousticTrigger.createdAt, AcousticTrigger.id
                 )
             ).all()
@@ -72,27 +76,21 @@ class TriggerProfileCache:
                 )
                 for row in fetched:
                     self._profiles[row.id] = (row.updatedAt, am.spectral_profile(row.spectralFingerprint))
-            live = {row.id for row in rows}
-            for trigger_id in self._profiles.keys() - live:
-                del self._profiles[trigger_id]
             # A trigger deleted between the two queries has no profile and is simply skipped.
-            self._templates = tuple(
+            self._templates[owner] = tuple(
                 am.TriggerTemplate(row.id, self._profiles[row.id][1], row.threshold)
                 for row in rows
                 if row.id in self._profiles
             )
-            self._snapshot = snapshot
-            return self._templates
+            self._snapshots[owner] = snapshot
+            return self._templates[owner]
 
 
 profile_cache = TriggerProfileCache()
 
 
-def get_trigger_or_404(db: Session, trigger_id: str) -> AcousticTrigger:
-    trigger = db.get(AcousticTrigger, trigger_id)
-    if trigger is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Acoustic trigger '{trigger_id}' not found")
-    return trigger
+def get_trigger_or_404(db: Session, trigger_id: str, owner: str | None) -> AcousticTrigger:
+    return get_owned_or_404(db, AcousticTrigger, trigger_id, owner, "Acoustic trigger")
 
 
 def apply_changes(db: Session, trigger: AcousticTrigger, changes: dict) -> AcousticTriggerOut:
@@ -106,11 +104,12 @@ def apply_changes(db: Session, trigger: AcousticTrigger, changes: dict) -> Acous
 @router.get("", response_model=list[AcousticTriggerOut])
 def list_triggers(
     db: DbSession,
+    owner: Owner,
     targetAction: TriggerAction | None = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[AcousticTriggerOut]:
-    query = select(AcousticTrigger).order_by(AcousticTrigger.createdAt, AcousticTrigger.id)
+    query = owned(select(AcousticTrigger), AcousticTrigger, owner).order_by(AcousticTrigger.createdAt, AcousticTrigger.id)
     if targetAction is not None:
         query = query.where(AcousticTrigger.targetAction == targetAction)
     triggers = db.scalars(query.limit(limit).offset(offset))
@@ -118,22 +117,22 @@ def list_triggers(
 
 
 @router.post("", response_model=AcousticTriggerOut, status_code=status.HTTP_201_CREATED)
-def create_trigger(payload: AcousticTriggerCreate, db: DbSession) -> AcousticTriggerOut:
-    trigger = AcousticTrigger(**payload.model_dump())
+def create_trigger(payload: AcousticTriggerCreate, db: DbSession, owner: Owner) -> AcousticTriggerOut:
+    trigger = AcousticTrigger(**payload.model_dump(), userId=owner)
     db.add(trigger)
     db.commit()
     return AcousticTriggerOut.model_validate(trigger)
 
 
 @router.post("/match", response_model=AcousticMatchResponse)
-def match_trigger(payload: AcousticMatchRequest, db: DbSession) -> AcousticMatchResponse:
+def match_trigger(payload: AcousticMatchRequest, db: DbSession, owner: Owner) -> AcousticMatchResponse:
     """Rank stored triggers against one 128-bin power spectrum (acoustic_matcher FFT peak matching).
 
     score blends envelope-shape cosine similarity, in-band energy and peak overlap; distance = 1 - score.
     Only the best candidate can fire, and only when its score reaches that trigger's own threshold.
     """
     start = time.perf_counter()
-    query, ranked = am.rank(payload.spectralFingerprint, profile_cache.templates(db), payload.topK)
+    query, ranked = am.rank(payload.spectralFingerprint, profile_cache.templates(db, owner), payload.topK)
     ids = [entry.template.trigger_id for entry in ranked]
     details = {
         row.id: row
@@ -172,23 +171,23 @@ def match_trigger(payload: AcousticMatchRequest, db: DbSession) -> AcousticMatch
 
 
 @router.get("/{trigger_id}", response_model=AcousticTriggerOut)
-def get_trigger(trigger_id: str, db: DbSession) -> AcousticTriggerOut:
-    return AcousticTriggerOut.model_validate(get_trigger_or_404(db, trigger_id))
+def get_trigger(trigger_id: str, db: DbSession, owner: Owner) -> AcousticTriggerOut:
+    return AcousticTriggerOut.model_validate(get_trigger_or_404(db, trigger_id, owner))
 
 
 @router.put("/{trigger_id}", response_model=AcousticTriggerOut)
-def replace_trigger(trigger_id: str, payload: AcousticTriggerCreate, db: DbSession) -> AcousticTriggerOut:
-    return apply_changes(db, get_trigger_or_404(db, trigger_id), payload.model_dump())
+def replace_trigger(trigger_id: str, payload: AcousticTriggerCreate, db: DbSession, owner: Owner) -> AcousticTriggerOut:
+    return apply_changes(db, get_trigger_or_404(db, trigger_id, owner), payload.model_dump())
 
 
 @router.patch("/{trigger_id}", response_model=AcousticTriggerOut)
-def update_trigger(trigger_id: str, payload: AcousticTriggerUpdate, db: DbSession) -> AcousticTriggerOut:
-    return apply_changes(db, get_trigger_or_404(db, trigger_id), payload.model_dump(exclude_unset=True))
+def update_trigger(trigger_id: str, payload: AcousticTriggerUpdate, db: DbSession, owner: Owner) -> AcousticTriggerOut:
+    return apply_changes(db, get_trigger_or_404(db, trigger_id, owner), payload.model_dump(exclude_unset=True))
 
 
 @router.delete("/{trigger_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_trigger(trigger_id: str, db: DbSession) -> Response:
-    db.delete(get_trigger_or_404(db, trigger_id))
+def delete_trigger(trigger_id: str, db: DbSession, owner: Owner) -> Response:
+    db.delete(get_trigger_or_404(db, trigger_id, owner))
     db.commit()
     profile_cache.invalidate(trigger_id)
     return Response(status_code=status.HTTP_204_NO_CONTENT)

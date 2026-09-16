@@ -251,9 +251,22 @@ class LicenseInfo(BaseModel):
     hardwareBound: bool
     activatedAt: Optional[UtcDatetime] = None
 
+# Mirror Feature in shared/types.ts and web_auth/plans.py.
+Feature = Literal[
+    "clearvoice", "aphasia", "sensory", "vocal_assist", "fluency", "therapy",
+    "unlimited_triggers", "caregiver_link", "analytics", "clinical_reports",
+]
+
+class Entitlements(BaseModel):
+    tier: PlanTier
+    features: List[Feature]
+    triggerLimit: Optional[int] = None  # None = unlimited
+    expiresAt: Optional[UtcDatetime] = None  # when a monthly/annual plan lapses; None for free and lifetime
+
 class AccountResponse(BaseModel):
     user: WebUserOut
     license: Optional[LicenseInfo] = None
+    entitlements: Entitlements
 
 class AuthSessionResponse(AccountResponse):
     token: str
@@ -273,13 +286,22 @@ class LicenseVerifyResponse(BaseModel):
     hardwareBound: bool = False
     activatedAt: Optional[UtcDatetime] = None
     checkedAt: UtcDatetime
+    # What the desktop app may unlock; the free feature set when the key is not valid.
+    features: List[Feature] = Field(default_factory=list)
+    triggerLimit: Optional[int] = None
+    expiresAt: Optional[UtcDatetime] = None
+
+class LicenseDeactivateResponse(BaseModel):
+    key: str
+    hardwareBound: bool
+    message: str
 
 
 # ---------------------------------------------------------------------------
 # Website billing (mock checkout): mirror the "Website billing" block in shared/types.ts.
 
 BillingPeriod = Literal["monthly", "annual", "lifetime"]
-SubscriptionStatus = Literal["active", "replaced", "cancelled"]
+SubscriptionStatus = Literal["active", "replaced", "cancelled", "expired"]
 PlanId = Literal["free", "pro_monthly", "pro_annual", "lifetime"]
 CardBrand = Literal["visa", "mastercard", "amex", "card"]
 
@@ -329,4 +351,5 @@ class CheckoutResponse(BaseModel):
     subscription: SubscriptionOut
     license: LicenseInfo
     user: WebUserOut
+    entitlements: Entitlements
     downloadUrl: str

@@ -4,6 +4,10 @@
 - POST /api/auth/login    check the password, returns a session token and the licence status
 - GET  /api/auth/me       the signed-in account (Authorization: Bearer <token>)
 - POST /api/license/verify  the desktop app's startup check of email + licence key, bound to one machine
+- POST /api/license/deactivate  signed in: unbind the key from its machine so another one can activate it
+
+Every answer carries the account's entitlements (web_auth/plans.py): the tier it is really on once lapsed
+subscriptions are settled, the features that tier unlocks and when it ends.
 
 Login answers the same way for an unknown email and a wrong password, and spends the same Argon2 work on
 both. Licence verification answers "invalid" the same way for an unknown email, an unknown key and another
@@ -24,6 +28,8 @@ from models import utcnow
 from schemas import (
     AccountResponse,
     AuthSessionResponse,
+    Entitlements,
+    LicenseDeactivateResponse,
     LicenseInfo,
     LicenseVerifyRequest,
     LicenseVerifyResponse,
@@ -35,6 +41,7 @@ from web_auth.database import get_web_db
 from web_auth.licenses import generate_license_key, hardware_fingerprint, normalise_license_key
 from web_auth.models import LicenseKey, WebUser
 from web_auth.passwords import hash_password, needs_rehash, spend_verification, verify_password
+from web_auth.plans import features_for, plan_expires_at, settle_plan, trigger_limit_for
 from web_auth.throttle import LoginThrottle
 from web_auth.tokens import decode_token, issue_token
 
@@ -75,13 +82,22 @@ def license_info(user: WebUser, key: LicenseKey | None) -> LicenseInfo | None:
     )
 
 
-def session_response(user: WebUser, key: LicenseKey | None) -> AuthSessionResponse:
-    session = issue_token(user.id, user.email, user.planTier)
+def entitlements(db: Session, user: WebUser) -> Entitlements:
+    tier, subscription = settle_plan(db, user)
+    return Entitlements(
+        tier=tier, features=features_for(tier), triggerLimit=trigger_limit_for(tier), expiresAt=plan_expires_at(subscription)
+    )
+
+
+def session_response(db: Session, user: WebUser, key: LicenseKey | None) -> AuthSessionResponse:
+    granted = entitlements(db, user)
+    session = issue_token(user.id, user.email, granted.tier)
     return AuthSessionResponse(
         token=session.token,
         expiresAt=session.expires_at,
         user=WebUserOut.model_validate(user),
         license=license_info(user, key),
+        entitlements=granted,
     )
 
 
@@ -110,7 +126,7 @@ def signup(payload: SignupRequest, db: WebDb) -> AuthSessionResponse:
             if email_taken(db, email):
                 raise conflict from None
             continue
-        return session_response(user, key)
+        return session_response(db, user, key)
     raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not allocate a license key.")
 
 
@@ -141,7 +157,7 @@ def login(payload: LoginRequest, db: WebDb) -> AuthSessionResponse:
     if needs_rehash(user.passwordHash):
         user.passwordHash = hash_password(payload.password)
         db.commit()
-    return session_response(user, current_license(db, user))
+    return session_response(db, user, current_license(db, user))
 
 
 def signed_in_user(
@@ -161,7 +177,22 @@ def signed_in_user(
 
 @router.get("/me", response_model=AccountResponse)
 def me(user: Annotated[WebUser, Depends(signed_in_user)], db: WebDb) -> AccountResponse:
-    return AccountResponse(user=WebUserOut.model_validate(user), license=license_info(user, current_license(db, user)))
+    granted = entitlements(db, user)  # first: settling a lapsed plan may change the user's tier
+    return AccountResponse(user=WebUserOut.model_validate(user), license=license_info(user, current_license(db, user)), entitlements=granted)
+
+
+@license_router.post("/deactivate", response_model=LicenseDeactivateResponse)
+def deactivate_license(user: Annotated[WebUser, Depends(signed_in_user)], db: WebDb) -> LicenseDeactivateResponse:
+    """Unbinds the account's current key from its machine. The next verification with a hardware id binds it again."""
+    key = current_license(db, user)
+    if key is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="This account has no license key.")
+    if key.hardwareIdBound is None:
+        return LicenseDeactivateResponse(key=key.keyString, hardwareBound=False, message="The key is not bound to any machine.")
+    key.hardwareIdBound = None
+    key.activatedAt = None
+    db.commit()
+    return LicenseDeactivateResponse(key=key.keyString, hardwareBound=False, message="The key can now be activated on another machine.")
 
 
 @license_router.post("/verify", response_model=LicenseVerifyResponse)
@@ -179,7 +210,8 @@ def verify_license(payload: LicenseVerifyRequest, db: WebDb) -> LicenseVerifyRes
         return LicenseVerifyResponse(valid=False, status="invalid", checkedAt=now)
 
     key, user = row
-    details = {"tier": key.tier, "checkedAt": now}
+    tier, subscription = settle_plan(db, user, now)
+    details = {"tier": tier, "checkedAt": now}
     if not user.isActive or user.licenseKey != key.keyString:
         return LicenseVerifyResponse(
             valid=False, status="inactive", hardwareBound=key.hardwareIdBound is not None, activatedAt=key.activatedAt, **details
@@ -202,5 +234,12 @@ def verify_license(payload: LicenseVerifyRequest, db: WebDb) -> LicenseVerifyRes
         )
 
     return LicenseVerifyResponse(
-        valid=True, status="active", hardwareBound=key.hardwareIdBound is not None, activatedAt=key.activatedAt, **details
+        valid=True,
+        status="active",
+        hardwareBound=key.hardwareIdBound is not None,
+        activatedAt=key.activatedAt,
+        features=features_for(tier),
+        triggerLimit=trigger_limit_for(tier),
+        expiresAt=plan_expires_at(subscription),
+        **details,
     )

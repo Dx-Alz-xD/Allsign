@@ -1,0 +1,19 @@
+# Node & Electron
+node_modules/
+frontend/.next/
+frontend/out/
+frontend/dist/
+*.log
+
+# Python & ML
+__pycache__/
+*.pyc
+backend/venv/
+backend/.env
+backend/data/
+*.onnx
+*.pt
+
+# OS files
+.DS_Store
+Thumbs.db

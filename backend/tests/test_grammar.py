@@ -3,6 +3,7 @@ from typing import TYPE_CHECKING, NamedTuple
 import pytest
 
 import grammar_engine
+from schemas import MAX_SPEECH_TOKENS, MAX_TOKEN_CHARS
 
 if TYPE_CHECKING:
     from fastapi.testclient import TestClient
@@ -56,11 +57,7 @@ CASES = [
     GrammarCase(["he", "not", "ate", "food"], "He did not eat food."),
     GrammarCase(["later", "me", "food", "eat"], "Later I eat food."),
     GrammarCase(["who", "want", "water"], "Who wants water?"),
-    GrammarCase(
-        ["where", "my", "shoes", "are"],
-        "Where are my shoes?",
-        known_gap="no WHQ rule for wh-word + NP + trailing copula",
-    ),
+    GrammarCase(["where", "my", "shoes", "are"], "Where are my shoes?"),
     GrammarCase(["where", "are", "my", "shoes"], "Where are my shoes?"),
     GrammarCase(["dog", "hungry"], "Dog is hungry."),
     GrammarCase(["hungry", "dog"], "Hungry dog."),
@@ -101,6 +98,57 @@ def test_translation(case: GrammarCase) -> None:
     assert "\n" not in result.parsed_tree and result.parsed_tree.startswith("(ROOT")
 
 
+@pytest.mark.parametrize(
+    "text, expected",
+    [
+        ("what your name is", "What is your name?"),
+        ("where my shoes is", "Where are my shoes?"),
+        ("where mom was", "Where was mom?"),
+        ("who that is", "Who is that?"),
+        ("why you are sad", "Why are you sad?"),
+        ("why you are not happy", "Why are you not happy?"),
+        ("where mom is going", "Where is mom going?"),
+    ],
+)
+def test_wh_questions_in_statement_order_are_inverted(text: str, expected: str) -> None:
+    assert grammar_engine.translate(text.split()).formatted_text == expected
+
+
+@pytest.mark.parametrize(
+    "text, expected, tree_fragment",
+    [
+        ("I know where my shoes are", "I know where my shoes are.",
+         "(SBAR (WH where) (S (NP (DET my) (N shoes)) (VP (COP are))))"),
+        ("tell me where mom is", "Tell me where mom is.", "(V tell) (NP (PRON me)) (SBAR (WH where)"),
+        ("do you know where mom is", "Do you know where mom is?", "(SQ (AUX do) (NP (PRON you))"),
+        ("I know where mom go", "I know where mom goes.", "(VP (V goes))"),
+        ("I don't know what you want", "I do not know what you want.", "(SBAR (WH what)"),
+        ("I know who want water", "I know who wants water.", "(S (VP (V wants) (NP (N water))))"),
+    ],
+)
+def test_indirect_questions_keep_statement_order(text: str, expected: str, tree_fragment: str) -> None:
+    result = grammar_engine.translate(text.split())
+    assert result.formatted_text == expected
+    assert tree_fragment in result.parsed_tree
+
+
+def test_oversized_groups_come_back_whole_and_do_not_block_short_clauses() -> None:
+    long_run = "big red happy dog small blue cat hot cold ball little tree good bad car new old box".split()
+    result = grammar_engine.translate(long_run + ["and", "where", "my", "shoes", "are"])
+    assert result.formatted_text == " ".join(long_run).capitalize() + " and where are my shoes?"
+    assert result.unparsed_groups == 1
+    assert result.parsed_tree.startswith("(ROOT (UNPARSED (ADJ big) (ADJ red)")
+    assert result.parsed_tree.endswith("(SBARQ (WH where) (SQ (COP are) (NP (DET my) (N shoes)))))")
+
+
+def test_every_word_survives_when_nothing_parses() -> None:
+    tokens = ("um I want to go to the park with my mom and my dad and my dog and my cat today now please " * 4).split()
+    result = grammar_engine.translate(tokens)
+    assert result.unparsed_groups >= 1
+    kept = result.formatted_text.rstrip(".?").lower().split()
+    assert kept == [token.lower() for token in tokens if token != "um"]
+
+
 def test_translate_endpoint_returns_contract_fields(client: "TestClient") -> None:
     response = client.post(
         "/api/grammar/translate",
@@ -112,6 +160,7 @@ def test_translate_endpoint_returns_contract_fields(client: "TestClient") -> Non
     assert body["originalTokens"] == ["me", "water", "want"]
     assert body["parsedTree"] == "(ROOT (S (NP (PRON I)) (VP (V want) (NP (N water)))))"
     assert body["executionLatencyMs"] >= 0
+    assert response.headers[grammar_engine.UNPARSED_HEADER] == "0"
 
 
 def test_translate_endpoint_rejects_non_json_numbers(client: "TestClient") -> None:
@@ -120,6 +169,31 @@ def test_translate_endpoint_rejects_non_json_numbers(client: "TestClient") -> No
     )
     assert response.status_code == 422
     assert response.json()["detail"][0]["input"] == "nan"
+
+
+def test_translate_endpoint_reports_unparsed_groups(client: "TestClient") -> None:
+    tokens = "big red happy dog small blue cat hot cold ball little tree good bad car new old box".split()
+    response = client.post("/api/grammar/translate", json={"rawSpeechTokens": tokens})
+    assert response.status_code == 200
+    assert response.headers[grammar_engine.UNPARSED_HEADER] == "1"
+    assert response.json()["parsedTree"].startswith("(ROOT (UNPARSED")
+
+
+@pytest.mark.parametrize(
+    "tokens",
+    [["water"] * (MAX_SPEECH_TOKENS + 1), ["w" * (MAX_TOKEN_CHARS + 1)]],
+    ids=["too many tokens", "token too long"],
+)
+def test_translate_endpoint_rejects_oversized_requests(client: "TestClient", tokens: list[str]) -> None:
+    response = client.post("/api/grammar/translate", json={"rawSpeechTokens": tokens})
+    assert response.status_code == 422
+
+
+def test_translate_endpoint_accepts_the_largest_allowed_request(client: "TestClient") -> None:
+    tokens = ["w" * MAX_TOKEN_CHARS] + ["water"] * (MAX_SPEECH_TOKENS - 1)
+    response = client.post("/api/grammar/translate", json={"rawSpeechTokens": tokens})
+    assert response.status_code == 200
+    assert response.json()["originalTokens"] == tokens
 
 
 def test_translate_endpoint_rejects_unsupported_language(client: "TestClient") -> None:

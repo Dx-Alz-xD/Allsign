@@ -82,9 +82,11 @@ app = FastAPI(title="OmniVoice OS Backend", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.CORS_ORIGINS,
+    allow_origin_regex=settings.CORS_ORIGIN_REGEX or None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=[grammar_engine.UNPARSED_HEADER],
 )
 
 

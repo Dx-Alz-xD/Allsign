@@ -58,21 +58,21 @@ CMUDICT = KaggleDataset(
     handle="rtatman/cmu-pronouncing-dictionary",
     folder="cmu-pronouncing-dictionary",
     required_files=("cmudict.dict", "cmudict.phones"),
-    license="CMU Pronouncing Dictionary license (free for research and commercial use; see LICENSE.txt)",
+    license="Copyright CMU; free for research and commercial use with acknowledgement (see LICENSE.txt)",
     approx_size_mb=3.6,
 )
 WORD_FREQUENCY = KaggleDataset(
     handle="rtatman/english-word-frequency",
     folder="english-word-frequency",
     required_files=("unigram_freq.csv",),
-    license="MIT (Peter Norvig, derived from the Google Web Trillion Word Corpus)",
+    license="Other: MIT-licensed generating code; counts derived from the LDC Google Web Trillion Word Corpus",
     approx_size_mb=5.0,
 )
 SPEECH_ACCENT_ARCHIVE = KaggleDataset(
     handle="rtatman/speech-accent-archive",
     folder="speech-accent-archive",
     required_files=("reading-passage.txt",),
-    license="CC BY-NC-SA 4.0 (non-commercial use only)",
+    license="CC BY-NC-SA (Kaggle lists 4.0, description says 2.0); non-commercial use only",
     approx_size_mb=951.0,
     speech=True,
 )
@@ -81,6 +81,32 @@ DATASETS = (CMUDICT, WORD_FREQUENCY, SPEECH_ACCENT_ARCHIVE)
 
 class SyncError(Exception):
     """A failure the operator can fix (credentials, missing files); reported without a traceback."""
+
+
+# ---------------------------------------------------------------------------
+# Offensive-word filter
+# ---------------------------------------------------------------------------
+# The frequency list is scraped web text, so without this filter profanity and slurs would surface as
+# word-finding cues and practice words. Stems also catch inflections (fucking, shitty); words whose stem
+# would hit ordinary vocabulary (assess, cockpit, dickens, niggle, grape, wankel) are matched whole.
+BLOCKED_STEMS = (
+    "asshole", "bastard", "bitch", "blowjob", "bollock", "bullshit", "cocksuck", "cunt", "dildo", "fuck",
+    "handjob", "hentai", "jizz", "masturbat", "motherfuck", "orgasm", "porn", "shit", "slut", "twat", "whore",
+    "xxx",
+)
+BLOCKED_WORDS = frozenset({
+    "anal", "arse", "ass", "asses", "boob", "boobs", "chink", "cock", "cocks", "crap", "crappy", "cum", "damn",
+    "damned", "dammit", "dick", "dicks", "dumbass", "dumbasses", "dyke", "fag", "fags", "faggot", "faggots",
+    "goddamn", "hell", "homo", "hooker", "jackass", "kike", "milf", "nigga", "niggas", "nigger", "niggers",
+    "nude", "nudes", "piss", "pissed", "pissing", "pussies", "pussy", "rape", "raped", "rapes", "raping",
+    "rapist", "rapists", "retard", "retarded", "retards", "sex", "sexy", "spic", "tit", "tits", "titties",
+    "titty", "tranny", "wank", "wanker", "wankers", "wanking", "wetback",
+})
+
+
+def is_blocked(word: str) -> bool:
+    word = word.lower()
+    return word in BLOCKED_WORDS or word.startswith(BLOCKED_STEMS)
 
 
 # ---------------------------------------------------------------------------
@@ -216,8 +242,20 @@ def parse_cmudict(path: Path, inventory: set[str]) -> tuple[list[DictionaryEntry
 
 
 def parse_word_frequencies(path: Path) -> dict[str, int]:
+    """word -> web count, with blocked words left out so they never rank as suggestions."""
+    frequencies: dict[str, int] = {}
+    blocked = 0
     with path.open(encoding="utf-8", newline="") as handle:
-        return {row["word"].lower(): int(row["count"]) for row in csv.DictReader(handle) if row.get("word")}
+        for row in csv.DictReader(handle):
+            word = (row.get("word") or "").lower()
+            if not word:
+                continue
+            if is_blocked(word):
+                blocked += 1
+                continue
+            frequencies[word] = int(row["count"])
+    log.info("Word frequencies: kept %d words, filtered %d offensive entries", len(frequencies), blocked)
+    return frequencies
 
 
 def read_word_list(path: Path | None) -> set[str]:
@@ -250,6 +288,7 @@ def build_vocabulary(
         if entry.variant == 1
         and entry.word in frequencies
         and entry.word not in excluded
+        and not is_blocked(entry.word)
         and _VOCABULARY_WORD.fullmatch(entry.word)
     ]
     candidates.sort(key=lambda entry: (-frequencies[entry.word], entry.word))

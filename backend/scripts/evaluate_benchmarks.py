@@ -532,6 +532,11 @@ class DatabaseResult:
     seed_seconds: float
     queries: list[QueryTiming]
     api: list[QueryTiming]
+    match_cold_ms: float
+
+    @property
+    def match_api(self) -> QueryTiming:
+        return next(query for query in self.api if query.name == MATCH_REQUEST)
 
     @property
     def slowest_query(self) -> QueryTiming:
@@ -605,10 +610,12 @@ def run_database(dataset: AcousticDataset, scale: Scale, freeze_gc: bool) -> Dat
             summary, source = seed_benchmark_database(engine, dataset, scale, rng)
             seed_seconds = time.perf_counter() - seed_start
             queries = time_database_queries(engine, scale, rng, freeze_gc)
-            api = time_api_round_trips(engine, scale, freeze_gc)
+            api, match_cold_ms = time_api_round_trips(engine, dataset, scale, freeze_gc)
         finally:
             engine.dispose()
-    return DatabaseResult(source, summary, scale.trigger_library, scale.session_rows, seed_seconds, queries, api)
+    return DatabaseResult(
+        source, summary, scale.trigger_library, scale.session_rows, seed_seconds, queries, api, match_cold_ms
+    )
 
 
 def time_database_queries(engine, scale: Scale, rng: random.Random, freeze_gc: bool) -> list[QueryTiming]:
@@ -737,10 +744,17 @@ def time_database_queries(engine, scale: Scale, rng: random.Random, freeze_gc: b
     return [QueryTiming(name, detail, time_calls(call, scale.db_repeats)) for name, detail, call in specs]
 
 
-def time_api_round_trips(engine, scale: Scale, freeze_gc: bool) -> list[QueryTiming]:
+MATCH_REQUEST = "POST /api/triggers/match"
+
+
+def time_api_round_trips(
+    engine, dataset: AcousticDataset, scale: Scale, freeze_gc: bool
+) -> tuple[list[QueryTiming], float]:
+    """Timings per request, plus the one-off first match call that profiles every stored trigger."""
     from fastapi.testclient import TestClient
 
     import main
+    from routers.triggers import profile_cache
 
     sessions = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
 
@@ -751,6 +765,10 @@ def time_api_round_trips(engine, scale: Scale, freeze_gc: bool) -> list[QueryTim
     with Session(engine) as session:
         trigger_ids = itertools.cycle(list(session.scalars(select(AcousticTrigger.id).limit(200))))
         fingerprint = session.scalars(select(AcousticTrigger.spectralFingerprint).limit(1)).one()
+    match_queries = itertools.cycle([bins for _, _, bins in dataset.positives])
+
+    def match_request():
+        return client.post(MATCH_REQUEST.split()[1], json={"spectralFingerprint": next(match_queries), "topK": 3})
 
     original_init_db = main.init_db
     main.app.dependency_overrides[get_db] = benchmark_db
@@ -758,6 +776,12 @@ def time_api_round_trips(engine, scale: Scale, freeze_gc: bool) -> list[QueryTim
     main.init_db = lambda: init_db(engine)
     try:
         with TestClient(main.app) as client:
+            profile_cache.clear()
+            cold_start = time.perf_counter()
+            cold = match_request()
+            match_cold_ms = (time.perf_counter() - cold_start) * 1000
+            if cold.status_code != 200 or not cold.json()["candidates"]:
+                raise RuntimeError(f"match benchmark request failed: {cold.status_code} {cold.text[:200]}")
             specs = [
                 ("POST /api/grammar/translate", "garbled SOV phrase through the AST engine",
                  lambda: client.post("/api/grammar/translate", json={"rawSpeechTokens": ["um", "me", "water", "want"]})),
@@ -765,6 +789,8 @@ def time_api_round_trips(engine, scale: Scale, freeze_gc: bool) -> list[QueryTim
                  lambda: client.get(f"/api/triggers/{next(trigger_ids)}")),
                 ("GET /api/triggers?limit=100", "100 triggers, fingerprints included",
                  lambda: client.get("/api/triggers", params={"limit": 100})),
+                (MATCH_REQUEST, f"rank {scale.trigger_library} stored triggers (cached profiles), top 3",
+                 match_request),
                 ("POST /api/triggers", "validate 128 finite floats, insert, commit",
                  lambda: client.post("/api/triggers", json={
                      "name": "Benchmark trigger", "spectralFingerprint": fingerprint, "mappedPhrase": "Benchmark phrase",
@@ -775,10 +801,12 @@ def time_api_round_trips(engine, scale: Scale, freeze_gc: bool) -> list[QueryTim
                 if response.status_code >= 400:
                     raise RuntimeError(f"API benchmark request failed: {response.status_code} {response.text[:200]}")
             settle_gc(freeze_gc)
-            return [QueryTiming(name, detail, time_calls(call, scale.db_repeats)) for name, detail, call in specs]
+            timings = [QueryTiming(name, detail, time_calls(call, scale.db_repeats)) for name, detail, call in specs]
+            return timings, match_cold_ms
     finally:
         main.init_db = original_init_db
         main.app.dependency_overrides.pop(get_db, None)
+        profile_cache.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -821,8 +849,10 @@ def git_revision() -> str:
         revision = subprocess.run(
             ["git", "rev-parse", "--short", "HEAD"], cwd=BACKEND_DIR, capture_output=True, text=True, check=True
         ).stdout.strip()
+        # The report itself is regenerated on every run, so it does not count as an uncommitted change.
         dirty = subprocess.run(
-            ["git", "status", "--porcelain", "--", "."], cwd=BACKEND_DIR, capture_output=True, text=True, check=True
+            ["git", "status", "--porcelain", "--", ".", ":(exclude)EVALUATION_REPORT.md"],
+            cwd=BACKEND_DIR, capture_output=True, text=True, check=True,
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return "unknown revision"
@@ -873,6 +903,9 @@ def render_report(evaluation: Evaluation) -> str:
         f"| FFT peak matching | Match latency p95 ({len(acoustic.dataset.templates)} / {acoustic.library_size} triggers) "
         f"| {fmt_ms(acoustic.match_enrolled.p95_ms)} / {fmt_ms(acoustic.match_library.p95_ms)} ms "
         f"| < {PIPELINE_TARGET_MS:g} ms | {status(max(acoustic.match_enrolled.p95_ms, acoustic.match_library.p95_ms))} |",
+        f"| FFT peak matching | `{MATCH_REQUEST}` p95 ({database.triggers} stored triggers) "
+        f"| {fmt_ms(database.match_api.timing.p95_ms)} ms | < {PIPELINE_TARGET_MS:g} ms "
+        f"| {status(database.match_api.timing.p95_ms)} |",
         f"| SQLite | Slowest query p95 ({slowest_query.name}) | {fmt_ms(slowest_query.timing.p95_ms)} ms "
         f"| < {PIPELINE_TARGET_MS:g} ms | {status(slowest_query.timing.p95_ms)} |",
         f"| API | Slowest round trip p95 ({slowest_api.name}) | {fmt_ms(slowest_api.timing.p95_ms)} ms "
@@ -1054,6 +1087,12 @@ def render_report(evaluation: Evaluation) -> str:
     lines += [
         f"| `{query.name}` | {query.detail} | {timing_cells(query.timing)} | {status(query.timing.p95_ms)} |"
         for query in database.api
+    ]
+    lines += [
+        "",
+        f"The first `{MATCH_REQUEST}` after startup took {fmt_ms(database.match_cold_ms)} ms because it profiles all "
+        f"{database.triggers:,} stored fingerprints once; later requests reuse the cached profiles, and edits "
+        "through the API refresh only the trigger they change. That one-off call is not part of the table above.",
     ]
 
     # --- Environment and appendix ----------------------------------------------

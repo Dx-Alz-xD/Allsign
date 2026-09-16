@@ -14,6 +14,7 @@ Frames quieter than the worker's silence floor never match.
 """
 
 import cmath
+import heapq
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -186,21 +187,48 @@ class MatchResult:
     score: float
 
 
-def match(bins: Sequence[float], templates: Sequence[TriggerTemplate]) -> MatchResult:
-    """Best-scoring trigger for a query spectrum; trigger_id is None when nothing clears its threshold."""
+@dataclass(frozen=True)
+class RankedTrigger:
+    template: TriggerTemplate
+    score: float
+
+
+def rank(
+    bins: Sequence[float], templates: Sequence[TriggerTemplate], limit: int = 1
+) -> tuple[SpectralProfile, list[RankedTrigger]]:
+    """The query's profile and its `limit` best triggers, best first; ties keep template order.
+
+    Frames below the silence floor rank nothing.
+    """
+    if limit < 1:
+        raise ValueError("limit must be at least 1")
     query = spectral_profile(bins)
-    if query.level_db < SILENCE_FLOOR_DB or not templates:
-        return MatchResult(None, 0.0)
-    best, best_score = None, -1.0
-    for template in templates:
+    if query.level_db < SILENCE_FLOOR_DB:
+        return query, []
+    # Min-heap of (score, -position, template): the weakest kept candidate sits on top.
+    kept: list[tuple[float, int, TriggerTemplate]] = []
+    for position, template in enumerate(templates):
         shape = _shape_score(query, template.profile)
-        # Band and peak terms add at most BAND_WEIGHT + PEAK_WEIGHT, so this template cannot beat the best.
-        if SHAPE_WEIGHT * shape + BAND_WEIGHT + PEAK_WEIGHT <= best_score:
+        # Band and peak terms add at most BAND_WEIGHT + PEAK_WEIGHT, so this template cannot displace
+        # the weakest kept candidate; skipping it leaves the result unchanged.
+        if len(kept) == limit and SHAPE_WEIGHT * shape + BAND_WEIGHT + PEAK_WEIGHT <= kept[0][0]:
             continue
-        score = _combined_score(query, template.profile, shape)
-        if score > best_score:
-            best, best_score = template, score
-    return MatchResult(best.trigger_id if best_score >= best.threshold else None, best_score)
+        entry = (_combined_score(query, template.profile, shape), -position, template)
+        if len(kept) < limit:
+            heapq.heappush(kept, entry)
+        elif entry[:2] > kept[0][:2]:
+            heapq.heapreplace(kept, entry)
+    kept.sort(key=lambda item: (-item[0], -item[1]))
+    return query, [RankedTrigger(template, score) for score, _, template in kept]
+
+
+def match(bins: Sequence[float], templates: Sequence[TriggerTemplate]) -> MatchResult:
+    """Best-scoring trigger for a query spectrum; trigger_id is None when it does not clear its threshold."""
+    _, ranked = rank(bins, templates)
+    if not ranked:
+        return MatchResult(None, 0.0)
+    best = ranked[0]
+    return MatchResult(best.template.trigger_id if best.score >= best.template.threshold else None, best.score)
 
 
 def average_fingerprint(spectra: Sequence[Sequence[float]]) -> list[float]:

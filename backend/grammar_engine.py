@@ -6,6 +6,7 @@ CFG -> rank candidate trees with fixed rules -> rebuild the winner as a canonica
 English (SVO) syntax tree -> linearize to text. No model calls anywhere.
 """
 
+import logging
 import re
 import sys
 import time
@@ -15,7 +16,7 @@ from itertools import islice
 from typing import NamedTuple
 
 import nltk
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from nltk import Tree
 from nltk.parse.earleychart import IncrementalChart, IncrementalLeftCornerChartParser
 
@@ -23,16 +24,23 @@ from schemas import GrammarRequestSchema, GrammarResponseSchema
 
 LATENCY_BUDGET_MS = 10.0
 # Parse work is bounded in chart edges (~10-12us each on a laptop), not wall-clock time, so the same
-# input always gets the same output. Groups that would exceed the budget fall back to a flat FRAG.
+# input always gets the same output. A clause group that cannot be parsed within the budget, or is longer
+# than MAX_GROUP_TOKENS, is returned cleaned but in its original order as an UNPARSED node.
 MAX_CHART_EDGES = 400
+MAX_GROUP_TOKENS = 16
 MAX_CANDIDATE_PARSES = 64
+UNPARSED_HEADER = "X-Grammar-Unparsed-Groups"
+
+log = logging.getLogger("grammar_engine")
 
 # ---------------------------------------------------------------------------
 # Formal grammar. Terminals are word-class tags produced by the lexer, so the
 # grammar stays small and compiles once. Each clause pattern (SVO, SOV, OSV, ...)
 # is its own non-terminal, which is what lets the transducer reorder it. A bare
 # FRAG is only allowed as a whole utterance (CL), never inside a coordination
-# (XCL); otherwise every "and" doubles the parse forest. Word classes appear as
+# (XCL); otherwise every "and" doubles the parse forest. A wh-question in statement order
+# ("where my shoes are") is a WHQ and gets inverted; the same words inside a complement
+# ("I know where my shoes are") are an indirect question (WHCL) and keep statement order. Word classes appear as
 # terminals directly inside phrase rules: single-word wrapper rules cost chart edges.
 # ---------------------------------------------------------------------------
 GRAMMAR_RULES = """
@@ -62,6 +70,7 @@ ZERO_COP_INV -> ZPRED NPRO
 YNQ -> QAUX NP VG | QAUX NP VG COMP | COP NP PRED
 WHQ -> WH QAUX NP VG | WH QAUX NP VG COMP | WH COP PRED
 WHQ -> WH NP | NP WH
+WHQ -> WH NP COP | WH NP COP PRED | WH NP COP NEG PRED
 WHQ -> WH NP VG | WH NP VG COMP | NP VG WH | NP VG COMP WH
 WHQ -> WH VG | WH VG COMP
 
@@ -72,11 +81,13 @@ AUXL -> 'aux' | 'cop'
 QAUX -> 'aux' | 'cop'
 VERB -> 'v' | 'ving'
 
-COMP -> NP | NP NP | NP PPS | PPS | INF | NP INF
+COMP -> NP | NP NP | NP PPS | PPS | INF | NP INF | WHCL | NP WHCL
 PPS -> PP | PP PPS
 PP -> PREP NP | NP PREP
 PREP -> 'p' | 'to'
 INF -> TO VERB | TO VERB COMP | VERB | VERB COMP
+WHCL -> WH NP VG | WH NP VG COMP | WH VG | WH VG COMP
+WHCL -> WH NP COP | WH NP COP PRED | WH NP COP NEG PRED
 
 PRED -> ADJP | PP | NP
 ZPRED -> ADJP | PP
@@ -503,6 +514,14 @@ def _comp_penalty(comp: Tree, governor: Token | None) -> int | None:
         return None
     penalty = 0
     for kid in comp:
+        if kid.label() == "WHCL":
+            nested = _child(kid, {"COMP"})
+            if nested is not None:
+                nested_penalty = _comp_penalty(nested, _main_verb(_child(kid, {"VG"})))
+                if nested_penalty is None:
+                    return None
+                penalty += nested_penalty
+            continue
         if kid.label() != "INF":
             continue
         if _child(kid, {"TO"}) is None:
@@ -650,7 +669,32 @@ def _comp(node: Tree, governor: Token | None) -> list[Tree]:
             parts.extend(_pp(pp) for pp in kid.subtrees(lambda sub: sub.label() == "PP"))
         elif kid.label() == "INF":
             parts.append(_infinitive(kid, governor, after_object=bool(nps)))
+        elif kid.label() == "WHCL":
+            parts.append(_embedded_question(kid))
     return parts
+
+
+def _embedded_question(node: Tree) -> Tree:
+    """Indirect question: wh-word + statement word order, e.g. (I know) where my shoes are."""
+    subject = _child(node, NP_LABELS)
+    vg = _child(node, {"VG"})
+    comp = _child(node, {"COMP"})
+    comp_parts = _comp(comp, _main_verb(vg)) if comp is not None else []
+    if vg is None:
+        agreement = _agreement(subject)
+        cop = _head_token(_child(node, {"COP"}))
+        neg = _head_token(_child(node, {"NEG"}))
+        pred = _child(node, {"PRED"})
+        verbs = [Tree("COP", [_copula(agreement, past=cop.word in PAST_COPULAS)])]
+        verbs += [_neg(neg)] if neg is not None else []
+        verbs += [_pred(pred)] if pred is not None else []
+        body = [_np(subject, "nom"), Tree("VP", verbs)]
+    elif subject is None:
+        body = [Tree("VP", _declarative_verbs(vg, "3sg", imperative=False) + comp_parts)]
+    else:
+        verbs = _declarative_verbs(vg, _agreement(subject), imperative=False)
+        body = [_np(subject, "nom"), Tree("VP", verbs + comp_parts)]
+    return Tree("SBAR", [_pre(_head_token(_child(node, {"WH"}))), Tree("S", body)])
 
 
 def _infinitive(node: Tree, governor: Token | None, after_object: bool) -> Tree:
@@ -763,15 +807,19 @@ def _question(pattern: Tree) -> Tree:
     comp = _child(pattern, {"COMP"})
     front = _head_token(_child(pattern, {"QAUX"}))
     cop = _head_token(_child(pattern, {"COP"}))
+    neg = _head_token(_child(pattern, {"NEG"}))
     pred = _child(pattern, {"PRED"})
 
-    if pred is not None and subject is not None:  # YNQ: is he hungry
-        sq = Tree("SQ", [Tree("COP", [_agree_aux(cop, agreement)]), _np(subject, "nom"), _pred(pred)])
+    if pred is not None and subject is not None:  # is he hungry / why you are (not) sad
+        negation = [_neg(neg)] if neg is not None else []
+        copula = Tree("COP", [_agree_aux(cop, agreement)])
+        sq = Tree("SQ", [copula, _np(subject, "nom"), *negation, _pred(pred)])
     elif pred is not None:  # WHQ: where are my shoes
         pred_agreement = _agreement(pred[0]) if pred[0].label() == "NP" else "3sg"
         sq = Tree("SQ", [Tree("COP", [_agree_aux(cop, pred_agreement)]), _pred(pred)])
-    elif vg is None:  # WHQ with no verb: where mom / mom where
-        sq = Tree("SQ", [Tree("COP", [_copula(agreement)]), _np(subject, "nom")])
+    elif vg is None:  # WHQ with no verb: where mom / mom where / where my shoes are
+        copula = _agree_aux(cop, agreement) if cop is not None else _copula(agreement)
+        sq = Tree("SQ", [Tree("COP", [copula]), _np(subject, "nom")])
     elif subject is None:  # WHQ with wh-subject: who want water
         comp_parts = _comp(comp, _main_verb(vg)) if comp is not None else []
         sq = Tree("SQ", [Tree("VP", _declarative_verbs(vg, "3sg", imperative=False) + comp_parts)])
@@ -861,13 +909,15 @@ class Translation:
     parsed_tree: str
     original_tokens: list[str]
     latency_ms: float
+    unparsed_groups: int = 0
 
 
 def _clause_groups(tokens: list[Token]) -> list[tuple[Token | None, list[Token]]]:
     """Split at conjunctions so each clause parses alone (the forest grows exponentially otherwise).
 
     A segment with no verb, copula, auxiliary or wh-word stays joined to its neighbour, which keeps
-    NP coordination ("me and mom go", "tea and water") and zero-copula clauses in one parse.
+    NP coordination ("me and mom go", "tea and water") and zero-copula clauses in one parse, unless the
+    joined group would pass MAX_GROUP_TOKENS: then a long verbless run cannot swallow the next clause.
     Returns (conjunction before the group, group tokens) pairs.
     """
     groups: list[tuple[Token | None, list[Token]]] = []
@@ -879,7 +929,8 @@ def _clause_groups(tokens: list[Token]) -> list[tuple[Token | None, list[Token]]
             segment.append(token)
             continue
         has_verb = any(item.tag in VERBAL_TAGS for item in segment)
-        if groups and (not has_verb or not verbal[-1]):
+        fits = bool(groups) and len(groups[-1][1]) + 1 + len(segment) <= MAX_GROUP_TOKENS
+        if fits and (not has_verb or not verbal[-1]):
             groups[-1][1].extend([conj, *segment] if conj is not None else segment)
             verbal[-1] = verbal[-1] or has_verb
         elif segment:
@@ -890,6 +941,8 @@ def _clause_groups(tokens: list[Token]) -> list[tuple[Token | None, list[Token]]
 
 
 def _transduce_group(tokens: list[Token], edge_budget: int) -> tuple[list[Tree], int]:
+    if len(tokens) > MAX_GROUP_TOKENS:
+        return [_unparsed(tokens)], 0
     tree, used = _parse(tokens, edge_budget)
     lifted: list[Token] = []
     if tree is None and any(token.tag == "adv" for token in tokens):
@@ -898,21 +951,31 @@ def _transduce_group(tokens: list[Token], edge_budget: int) -> tuple[list[Tree],
         tree, retry_used = _parse([token for token in tokens if token.tag != "adv"], edge_budget - used)
         used += retry_used
     if tree is None:
-        return [Tree("FRAG", [_pre(token) for token in tokens])], used
+        return [_unparsed(tokens)], used
     clauses = _canonical(tree)
     if lifted:
         clauses[-1].append(Tree("ADVP", [_pre(token) for token in lifted]))
     return clauses, used
 
 
+def _unparsed(tokens: list[Token]) -> Tree:
+    """Cleaned words in their original order: nothing the speaker said is dropped when parsing gives up."""
+    return Tree("UNPARSED", [_pre(token) for token in tokens])
+
+
 def transduce(tokens: list[Token]) -> Tree:
-    parts: list[Tree] = []
+    groups = _clause_groups(tokens)
+    results: list[list[Tree]] = [[] for _ in groups]
     edge_budget = MAX_CHART_EDGES
-    for conj, group in _clause_groups(tokens):
+    # Shortest groups spend the shared budget first, so one long clause cannot starve the short ones.
+    for index in sorted(range(len(groups)), key=lambda position: (len(groups[position][1]), position)):
+        results[index], used = _transduce_group(groups[index][1], edge_budget)
+        edge_budget -= used
+
+    parts: list[Tree] = []
+    for (conj, _), clauses in zip(groups, results):
         if conj is not None and parts:
             parts.append(_pre(conj))
-        clauses, used = _transduce_group(group, edge_budget)
-        edge_budget -= used
         parts.extend(clauses)
     return Tree("ROOT", parts)
 
@@ -922,11 +985,15 @@ def translate(raw_tokens: list[str]) -> Translation:
     root = transduce(_lex(_normalize(raw_tokens)))
     formatted = _render(root)
     parsed = root.pformat(margin=sys.maxsize)
+    unparsed = sum(1 for part in root if part.label() == "UNPARSED")
+    if unparsed:
+        log.warning("%d clause group(s) of a %d-token input were returned unparsed", unparsed, len(raw_tokens))
     return Translation(
         formatted_text=formatted,
         parsed_tree=parsed,
         original_tokens=list(raw_tokens),
         latency_ms=(time.perf_counter() - start) * 1000,
+        unparsed_groups=unparsed,
     )
 
 
@@ -934,10 +1001,12 @@ router = APIRouter(prefix="/api/grammar", tags=["grammar"])
 
 
 @router.post("/translate", response_model=GrammarResponseSchema)
-def translate_tokens(request: GrammarRequestSchema) -> GrammarResponseSchema:
+def translate_tokens(request: GrammarRequestSchema, response: Response) -> GrammarResponseSchema:
     if request.sourceLang != "en":
         raise HTTPException(status_code=422, detail=f"Unsupported sourceLang '{request.sourceLang}'; only 'en' has a grammar")
     result = translate(request.rawSpeechTokens)
+    # Clause groups the engine could not reorder; they are still in parsedTree as UNPARSED nodes.
+    response.headers[UNPARSED_HEADER] = str(result.unparsed_groups)
     return GrammarResponseSchema(
         formattedText=result.formatted_text,
         parsedTree=result.parsed_tree,

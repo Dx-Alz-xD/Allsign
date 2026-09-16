@@ -35,7 +35,9 @@ def test_evaluation_covers_every_suite_and_renders_the_report() -> None:
 
     database = evaluation.database
     assert "synthetic" in database.lexicon_source or "Kaggle" in database.lexicon_source
-    assert len(database.queries) == 10 and len(database.api) == 4
+    assert len(database.queries) == 10 and len(database.api) == 5
+    assert database.match_api.timing.samples == TINY.db_repeats
+    assert database.match_cold_ms > 0
     assert all(query.timing.samples == TINY.db_repeats for query in database.queries + database.api)
 
     report = bench.render_report(evaluation)
@@ -51,3 +53,4 @@ def test_evaluation_covers_every_suite_and_renders_the_report() -> None:
         assert heading in report
     assert "**Overall: " in report
     assert report.count("| `POST /api/triggers` |") == 1
+    assert report.count("| `POST /api/triggers/match` |") == 1

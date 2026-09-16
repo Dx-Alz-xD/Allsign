@@ -32,7 +32,7 @@ export interface FormantData {
 export interface AcousticTriggerProfile {
   id: string;
   name: string;
-  spectralFingerprint: number[]; // 128-float FFT snapshot
+  spectralFingerprint: number[]; // 128-bin power spectrum (audio.worker spectralBins), values >= 0
   mappedPhrase: string;
   targetAction: 'DIRECT_PASTE' | 'TTS_SPOKEN' | 'WEBRTC_ALERT' | 'OS_HOTKEY';
   threshold: number; // Similarity confidence threshold
@@ -68,4 +68,32 @@ export interface SystemState {
   isDirectPasteActive: boolean;
   webRtcPeerConnected: boolean;
   latencyMs: number;
+}
+
+// Partial trigger update (PATCH /api/triggers/{id}); omitted fields keep their stored values
+export type AcousticTriggerUpdate = Partial<Omit<AcousticTriggerProfile, 'id'>>;
+
+// FFT Peak Matching (POST /api/triggers/match)
+export interface AcousticMatchRequest {
+  spectralFingerprint: number[]; // 128-bin power spectrum, values >= 0
+  topK?: number; // 1 - 20, default 3
+}
+
+export interface AcousticMatchCandidate {
+  triggerId: string;
+  name: string;
+  mappedPhrase: string;
+  targetAction: AcousticTriggerProfile['targetAction'];
+  threshold: number;
+  score: number; // 0 - 1 similarity
+  distance: number; // 1 - score
+}
+
+export interface AcousticMatchResponse {
+  matched: boolean;
+  trigger: AcousticMatchCandidate | null; // best candidate, only when it clears its own threshold
+  candidates: AcousticMatchCandidate[]; // best first
+  levelDb: number;
+  silent: boolean; // below the silence floor, so nothing can match
+  executionLatencyMs: number;
 }

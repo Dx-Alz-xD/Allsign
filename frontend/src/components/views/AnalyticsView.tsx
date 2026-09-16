@@ -33,9 +33,10 @@ export function AnalyticsView() {
     }
   }, []);
 
+  // Reload when the backend comes up and when the microphone stops, which records the session.
   useEffect(() => {
-    if (backendOnline) void load();
-  }, [backendOnline, load]);
+    if (backendOnline && !live) void load();
+  }, [backendOnline, live, load]);
 
   const save = async () => {
     const saved = await recordSession();
@@ -54,7 +55,7 @@ export function AnalyticsView() {
   return (
     <div className="space-y-6">
       <section aria-label="Current session" className="glass flex flex-wrap items-center gap-6 rounded-2xl px-5 py-4">
-        <Stat label="This session" value={formatDuration(current.sessionDurationSeconds)} />
+        <Stat label="This session" value={live ? formatDuration(current.sessionDurationSeconds) : 'Microphone off'} />
         <Stat label="Speaking rate" value={`${Math.round(current.wpm)} WPM`} />
         <Stat label="Blocks" value={String(current.stutterCount)} />
         <Stat label="Fluency" value={`${Math.round(current.fluencyPercentage)}%`} />

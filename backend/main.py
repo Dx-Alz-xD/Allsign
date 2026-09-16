@@ -15,7 +15,8 @@ from pydantic import BaseModel
 import grammar_engine
 from config import get_settings
 from database import init_db
-from routers import auth, phonemes, presets, sessions, signalling, triggers
+from routers import agents as agent_routes
+from routers import auth, billing, phonemes, presets, sessions, signalling, triggers
 from web_auth.database import init_web_db
 
 # Garbled SOV probe so the healthcheck exercises normalization, parsing, ranking and reordering.
@@ -109,6 +110,8 @@ app.include_router(phonemes.router)
 app.include_router(signalling.router)
 app.include_router(auth.router)
 app.include_router(auth.license_router)
+app.include_router(billing.router)
+app.include_router(agent_routes.router)
 
 
 @app.get("/health/live", response_model=LiveHealth)

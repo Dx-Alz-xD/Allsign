@@ -273,3 +273,177 @@ export interface LicenseVerifyResponse {
   activatedAt: string | null;
   checkedAt: string;
 }
+
+// ---------------------------------------------------------------------------
+// Website billing (mock checkout). Mirror of the "Website billing" block in backend/schemas.py.
+
+export type BillingPeriod = 'monthly' | 'annual' | 'lifetime';
+export type SubscriptionStatus = 'active' | 'replaced' | 'cancelled';
+export type PlanId = 'free' | 'pro_monthly' | 'pro_annual' | 'lifetime';
+export type CardBrand = 'visa' | 'mastercard' | 'amex' | 'card';
+
+// GET /api/billing/plans
+export interface PricingPlan {
+  id: PlanId;
+  tier: PlanTier;
+  name: string;
+  priceCents: number;
+  billingPeriod: BillingPeriod | null; // null for the free plan
+  features: string[];
+}
+
+// Test numbers only: 4242 4242 4242 4242 succeeds, 4000 0000 0000 0002 is declined. The backend keeps the
+// brand and last four digits and drops the rest.
+export interface CardDetails {
+  number: string;
+  expMonth: number;
+  expYear: number;
+  cvc: string;
+  name: string;
+}
+
+// POST /api/billing/checkout (Authorization: Bearer <token>)
+export interface CheckoutRequest {
+  planId: Exclude<PlanId, 'free'>;
+  card: CardDetails;
+}
+
+export interface Subscription {
+  id: string;
+  planId: PlanId;
+  tier: PlanTier;
+  billingPeriod: BillingPeriod;
+  amountCents: number;
+  currency: string;
+  cardBrand: CardBrand;
+  cardLast4: string;
+  status: SubscriptionStatus;
+  createdAt: string; // ISO 8601, UTC
+  currentPeriodEnd: string | null; // null for lifetime access
+  licenseKey: string;
+}
+
+export interface CheckoutResponse {
+  subscription: Subscription;
+  license: LicenseInfo;
+  user: WebUser;
+  downloadUrl: string; // the desktop installer, Voicematics-Setup.exe
+}
+
+// ---------------------------------------------------------------------------
+// Language-model agents (backend/agents/, routers/agents.py). They run beside the speech path, never in it:
+// the website chat, an authoring-time grammar compiler and a post-session report writer.
+
+export type AgentProvider = 'gemini' | 'groq';
+
+// GET /api/agent/status
+export interface AgentStatus {
+  available: boolean;
+  providers: AgentProvider[]; // in the order they are tried
+  primary: AgentProvider | null;
+}
+
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string; // 1 - 4000 characters
+}
+
+// POST /api/agent/chat; the last message must be from the user
+export interface ChatRequest {
+  messages: ChatMessage[]; // 1 - 40
+}
+
+export interface ToolCallRecord {
+  name: 'simulate_dsp_delay' | 'recommend_settings' | string;
+  args: Record<string, unknown>;
+  result: unknown; // DspDelayEstimate | SettingsRecommendation
+}
+
+export interface ChatResponse {
+  reply: string;
+  toolCalls: ToolCallRecord[];
+  modelName: string;
+}
+
+// simulate_dsp_delay(sample_rate): the desktop app's capture -> analysis latency arithmetic
+export interface DspDelayEstimate {
+  sampleRate: number;
+  captureQuantumMs: number;
+  antiAliasTaps: number;
+  antiAliasGroupDelayMs: number;
+  resampleRatio: number;
+  analysisHopMs: number;
+  processingMsPerHop: number;
+  endToEndMs: number;
+  averageMs: number;
+  worstCaseMs: number;
+  budgetMs: number;
+  withinBudget: boolean;
+}
+
+export type DisfluencyType = 'stuttering' | 'dysarthria' | 'aphasia';
+
+// recommend_settings(disfluency_type)
+export interface SettingsRecommendation {
+  disfluencyType: DisfluencyType;
+  dafDelayMs: number;
+  pitchShiftSemitones: number;
+  rationale: string;
+}
+
+// POST /api/agent/generate-report
+export interface StrainSample {
+  timestamp: number; // ms since the session started
+  jitterPercent: number;
+  shimmerDb: number;
+  hnrDb: number;
+  strainIndex: number; // 0 - 100
+  pitchHz?: number | null;
+}
+
+export interface FeedbackEvent {
+  timestamp: number; // ms since the session started
+  kind: 'daf' | 'fsf' | 'block'; // daf/fsf: feedback switched on or changed; block: a vocal block
+  value: number; // delay ms / octave shift / block duration ms
+}
+
+export interface SessionLog {
+  sessionId?: string | null;
+  startedAt?: string | null;
+  profileMode?: string | null;
+  samples: StrainSample[];
+  events: FeedbackEvent[];
+  dafDelayMs: number;
+  fsfOctaveShift: number;
+  speakingMs?: number | null;
+}
+
+// The numbers are computed by the backend from the log; the model writes only the paragraph.
+export interface ClinicalReport {
+  session_duration_minutes: number;
+  stuttering_reduction_index: number; // -1 .. 1
+  vocal_fatigue_alert: boolean;
+  slp_summary_paragraph: string;
+  recommended_daf_delay_ms: number;
+}
+
+// POST /api/agent/compile-grammar
+export interface CompileGrammarRequest {
+  prompt: string; // 3 - 1000 characters
+  save?: boolean; // default true: append to backend/grammars/user_custom.cfg
+}
+
+export interface CFGCompilerOutput {
+  grammar_rules: string[]; // NLTK productions, e.g. "WHQ_WHERE -> WH NP COP"
+  ast_transform_map: Record<string, string>; // non-terminal -> rebuilt word order
+  validation_status: boolean;
+}
+
+export interface CompiledGrammar {
+  request: string;
+  output: CFGCompilerOutput;
+  path: string;
+  validationRounds: number;
+  modelName: string;
+  saved: boolean;
+}

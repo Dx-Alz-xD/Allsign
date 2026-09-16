@@ -8,3 +8,4 @@ kagglehub>=1.0
 argon2-cffi>=23.1
 PyJWT>=2.8
 email-validator>=2.1
+pydantic-ai-slim[google,groq]>=2.43

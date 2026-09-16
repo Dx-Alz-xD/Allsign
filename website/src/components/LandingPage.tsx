@@ -1,0 +1,62 @@
+'use client';
+
+import { useState } from 'react';
+import type { PricingPlan } from '@shared/types';
+import { AgentAssistant } from '@/components/AgentAssistant';
+import { AuthModal, type AuthMode } from '@/components/AuthModal';
+import { CheckoutModal } from '@/components/CheckoutModal';
+import { DashboardOverlay } from '@/components/DashboardOverlay';
+import { DownloadSimulation } from '@/components/DownloadSimulation';
+import { Features } from '@/components/Features';
+import { Header } from '@/components/Header';
+import { Hero } from '@/components/Hero';
+import { Pricing } from '@/components/Pricing';
+import { TechSimulator } from '@/components/simulator/TechSimulator';
+import { SessionProvider, useSession } from '@/lib/session';
+
+const INSTALLER_URL = 'https://github.com/Dx-Alz-xD/Allsign/releases/latest/download/Voicematics-Setup.exe';
+
+function Page() {
+  const { account } = useSession();
+  const [authMode, setAuthMode] = useState<AuthMode | null>(null);
+  const [checkoutPlan, setCheckoutPlan] = useState<PricingPlan | null>(null);
+  const [dashboardOpen, setDashboardOpen] = useState(false);
+  const [downloadUrl, setDownloadUrl] = useState<string | null>(null);
+
+  return (
+    <>
+      <Header onSignIn={() => setAuthMode('signin')} onOpenDashboard={() => setDashboardOpen(true)} />
+      <main>
+        <Hero onDownload={() => setDownloadUrl(INSTALLER_URL)} />
+        <Features />
+        <TechSimulator />
+        <Pricing onSubscribe={setCheckoutPlan} onCreateAccount={() => setAuthMode('signup')} onOpenDashboard={() => setDashboardOpen(true)} />
+      </main>
+      <footer className="border-t border-white/[0.06] px-6 py-10 text-center text-xs text-smoke">
+        Voicematics is the desktop distribution of OmniVoice OS. All speech processing runs on the device; this site talks only to your local backend for accounts and licences.
+      </footer>
+
+      <AuthModal mode={authMode} onClose={() => setAuthMode(null)} onDone={() => setAuthMode(null)} />
+      <CheckoutModal plan={checkoutPlan} onClose={() => setCheckoutPlan(null)} onDownload={(url) => setDownloadUrl(url)} />
+      <DashboardOverlay
+        open={dashboardOpen && account !== null}
+        onClose={() => setDashboardOpen(false)}
+        onDownload={() => setDownloadUrl(INSTALLER_URL)}
+        onUpgrade={() => {
+          setDashboardOpen(false);
+          document.getElementById('pricing')?.scrollIntoView({ behavior: 'smooth' });
+        }}
+      />
+      <DownloadSimulation url={downloadUrl} onClose={() => setDownloadUrl(null)} />
+      <AgentAssistant />
+    </>
+  );
+}
+
+export function LandingPage() {
+  return (
+    <SessionProvider>
+      <Page />
+    </SessionProvider>
+  );
+}

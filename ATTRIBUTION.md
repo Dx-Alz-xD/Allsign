@@ -72,6 +72,7 @@ Downloads use [`kagglehub`](https://github.com/Kaggle/kagglehub) with each devel
 | argon2-cffi | MIT | Argon2id password hashing for Voicematics accounts |
 | PyJWT | MIT | Session tokens for Voicematics accounts |
 | email-validator (with dnspython, ISC) | Unlicense | Email address validation for Voicematics signups |
+| pydantic-ai-slim (with google-genai and groq) | MIT | The website assistant, grammar compiler and report writer agents; Gemini first, Groq fallback |
 | pytest (development) | MIT | Test suite |
 | httpx2 (development) | BSD-3-Clause | HTTP client used by FastAPI's test client |
 

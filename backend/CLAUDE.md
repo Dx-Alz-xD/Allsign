@@ -89,6 +89,34 @@ venv/Scripts/python.exe scripts/evaluate_benchmarks.py  # regenerate EVALUATION_
 | `POST /api/auth/signup`, `POST /api/auth/login` | `AuthCredentials` -> `AuthSessionResponse` | Voicematics website |
 | `GET /api/auth/me` (Bearer token) | -> `AccountResponse` | Voicematics website |
 | `POST /api/license/verify` | `LicenseVerifyRequest` -> `LicenseVerifyResponse` | desktop app startup (client ready, not wired) |
+| `GET /api/billing/plans` | -> `PricingPlan[]` | website pricing matrix |
+| `POST /api/billing/checkout`, `GET /api/billing/subscription` (Bearer token) | `CheckoutRequest` -> `CheckoutResponse`, `Subscription` | website mock checkout, dashboard overlay |
+| `GET /api/agent/status` | -> `AgentStatus` | website assistant widget |
+| `POST /api/agent/chat` | `ChatRequest` -> `ChatResponse` | website `AgentAssistant.tsx` |
+| `POST /api/agent/generate-report` | `SessionLog` -> `ClinicalReport` | clinician report (no UI yet) |
+| `POST /api/agent/compile-grammar` | `CompileGrammarRequest` -> `CompiledGrammar` | grammar authoring (no UI yet) |
 
-- Change a contract in both files in the same commit; the frontend client is `frontend/src/lib/api/client.ts`.
+- Change a contract in both files in the same commit; the desktop client is `frontend/src/lib/api/client.ts`, the website client is `website/src/lib/api.ts`.
 - `frontend/src/workers/trigger.worker.ts` ports `acoustic_matcher.py`; `tests/test_acoustic_matcher.py` and `src/workers/__tests__/dsp.test.ts` pin the same reference values.
+
+---
+
+## 7. Language-Model Agents (`/backend/agents`) and the Voicematics Website (`/website`)
+The no-model rule in section 1 is about the speech path: capture, DSP workers, worklets, the grammar engine, trigger matching and everything the desktop app does while someone speaks. Three agents run **beside** that path, never in it, and nothing they produce is consumed live:
+- `agents/assistant.py`: the website's onboarding chat (`AgentAssistant.tsx`). Two deterministic tools, `simulate_dsp_delay` and `recommend_settings`; the model never hears audio.
+- `agents/cfg_compiler.py`: plain-text correction request -> NLTK CFG rules, validated with `nltk.CFG.fromstring()` and against `grammar_engine.GRAMMAR_RULES` before they are appended to `grammars/user_custom.cfg` (+ `.transforms.json`). Loading those rules into the engine is a separate, deterministic step that does not exist yet.
+- `agents/telemetry_reporter.py`: session log -> `ClinicalReport`. Every number is computed in Python; the model writes only `slp_summary_paragraph`.
+
+Rules:
+- Provider order is Gemini, then Groq on any Gemini failure (`agents/llm.py`, pydantic-ai `FallbackModel`). Keys: `GEMINI_API_KEY`, `GROQ_API_KEY` in `backend/.env`; with neither set the `/api/agent` endpoints answer 503 and the website widget shows "Offline".
+- Never import `agents/` from `grammar_engine.py`, `acoustic_matcher.py`, the routers the desktop app calls in real time, or anything under `frontend/src/workers`.
+- Tests script the model with `pydantic_ai.models.function.FunctionModel` and set `models.ALLOW_MODEL_REQUESTS = False`; no test may call a provider.
+- The website (`website/`, Next.js 14 on port 3100, Tailwind + anime.js) talks only to this backend: accounts, licences, the mock checkout (`routers/billing.py`, test card 4242 4242 4242 4242, brand + last four stored) and the agents. It is not part of the Electron build.
+
+```bash
+cd website
+npm install
+npm run dev          # http://localhost:3100 (expects the backend on 8000)
+npm run typecheck
+npm run build
+```

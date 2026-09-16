@@ -15,7 +15,8 @@ class Settings(BaseSettings):
     # Only the Kaggle dataset scripts need these, so the API boots without them.
     KAGGLE_USERNAME: str = ""
     KAGGLE_KEY: SecretStr = SecretStr("")
-    CORS_ORIGINS: list[str] = ["http://localhost:3000"]
+    # The desktop app in dev (3000) and the Voicematics website (3100).
+    CORS_ORIGINS: list[str] = ["http://localhost:3000", "http://localhost:3100", "http://127.0.0.1:3100"]
     # Desktop shells, matched in full: Electron's app:// scheme and any loopback port. The packaged app loads
     # its UI over app://omnivoice, so "Origin: null" (file:// pages, but also sandboxed iframes on any website)
     # is not allowed: with credentials on, it would let any site call this API.
@@ -27,6 +28,21 @@ class Settings(BaseSettings):
     # stored next to web_users.db, so it never has to live in .env or git.
     AUTH_JWT_SECRET: SecretStr = SecretStr("")
     AUTH_TOKEN_TTL_MINUTES: int = 12 * 60
+
+    # Language-model agents (agents/): the website assistant, the grammar-rule compiler and the clinical
+    # report writer. None of them is in the speech path (CLAUDE.md section 7). Gemini is tried first and
+    # Groq takes over when a Gemini call fails; with both keys empty the /api/agent endpoints answer 503.
+    GEMINI_API_KEY: SecretStr = SecretStr("")
+    GEMINI_MODEL: str = "gemini-flash-latest"
+    GROQ_API_KEY: SecretStr = SecretStr("")
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    AGENT_TIMEOUT_SECONDS: float = 60.0
+    # Requests per minute per client address across the /api/agent endpoints.
+    AGENT_RATE_LIMIT_PER_MINUTE: int = 20
+    # Where the grammar compiler saves validated rules; relative paths resolve against backend/.
+    CUSTOM_GRAMMAR_PATH: str = "./grammars/user_custom.cfg"
+    # Where the website sends people for the desktop installer (electron-builder publishes there).
+    INSTALLER_DOWNLOAD_URL: str = "https://github.com/Dx-Alz-xD/Allsign/releases/latest/download/Voicematics-Setup.exe"
 
 
 @lru_cache

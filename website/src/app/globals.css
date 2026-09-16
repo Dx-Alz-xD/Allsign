@@ -1,0 +1,58 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: #0d0d0d;
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-white/[0.08] bg-onyx/80 backdrop-blur;
+  }
+
+  .ember-text {
+    @apply bg-ember-edge bg-clip-text text-transparent;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center gap-2 rounded-xl bg-ember-edge px-5 py-3 font-display text-sm font-semibold uppercase tracking-wider text-obsidian shadow-ember transition hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ember disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center gap-2 rounded-xl border border-white/15 bg-white/[0.04] px-5 py-3 font-display text-sm font-semibold uppercase tracking-wider text-bone transition hover:border-ember/60 hover:bg-white/[0.08] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ember disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .field {
+    @apply w-full rounded-lg border border-white/15 bg-black/40 px-3 py-2 text-bone placeholder:text-smoke/60 focus:border-ember focus:outline-none disabled:opacity-60;
+  }
+
+  .label {
+    @apply mb-1 block text-xs font-bold uppercase tracking-wider text-smoke;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.04] px-3 py-1 text-xs font-semibold uppercase tracking-wider text-smoke;
+  }
+}
+
+input[type='range'] {
+  accent-color: #ff6600;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

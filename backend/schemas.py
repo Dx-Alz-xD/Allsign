@@ -273,3 +273,60 @@ class LicenseVerifyResponse(BaseModel):
     hardwareBound: bool = False
     activatedAt: Optional[UtcDatetime] = None
     checkedAt: UtcDatetime
+
+
+# ---------------------------------------------------------------------------
+# Website billing (mock checkout): mirror the "Website billing" block in shared/types.ts.
+
+BillingPeriod = Literal["monthly", "annual", "lifetime"]
+SubscriptionStatus = Literal["active", "replaced", "cancelled"]
+PlanId = Literal["free", "pro_monthly", "pro_annual", "lifetime"]
+CardBrand = Literal["visa", "mastercard", "amex", "card"]
+
+
+class PricingPlan(BaseModel):
+    id: PlanId
+    tier: PlanTier
+    name: str
+    priceCents: int
+    billingPeriod: Optional[BillingPeriod] = None  # None for the free plan
+    features: List[str]
+
+
+class CardDetails(BaseModel):
+    # Test numbers only (4242 4242 4242 4242 succeeds, 4000 0000 0000 0002 is declined). The number is
+    # checked and dropped; only the brand and last four digits are stored.
+    number: Annotated[str, StringConstraints(strip_whitespace=True, min_length=13, max_length=23)]
+    expMonth: int = Field(ge=1, le=12)
+    expYear: int = Field(ge=2000, le=2100)
+    cvc: Annotated[str, StringConstraints(strip_whitespace=True, pattern=r"^\d{3,4}$")]
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+
+
+class CheckoutRequest(BaseModel):
+    planId: Literal["pro_monthly", "pro_annual", "lifetime"]
+    card: CardDetails
+
+
+class SubscriptionOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    planId: PlanId
+    tier: PlanTier
+    billingPeriod: BillingPeriod
+    amountCents: int
+    currency: str
+    cardBrand: CardBrand
+    cardLast4: str
+    status: SubscriptionStatus
+    createdAt: UtcDatetime
+    currentPeriodEnd: Optional[UtcDatetime] = None
+    licenseKey: str
+
+
+class CheckoutResponse(BaseModel):
+    subscription: SubscriptionOut
+    license: LicenseInfo
+    user: WebUserOut
+    downloadUrl: str

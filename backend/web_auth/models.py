@@ -46,3 +46,31 @@ class LicenseKey(WebBase):
     activatedAt: Mapped[datetime | None] = mapped_column("activated_at", DateTime(timezone=True))
 
     user: Mapped[WebUser] = relationship(back_populates="licenses")
+
+
+BillingPeriod = Literal["monthly", "annual", "lifetime"]
+SubscriptionStatus = Literal["active", "replaced", "cancelled"]
+
+
+class Subscription(WebBase):
+    """A mock checkout result: which plan the account is on and how it was paid for. Only the card's brand
+    and last four digits are kept."""
+
+    __tablename__ = "subscriptions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    userId: Mapped[str] = mapped_column("user_id", ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    planId: Mapped[str] = mapped_column("plan_id", String(32))
+    tier: Mapped[str] = mapped_column(choice(PlanTier, "ck_subscriptions_tier"))
+    billingPeriod: Mapped[str] = mapped_column("billing_period", choice(BillingPeriod, "ck_subscriptions_billing_period"))
+    amountCents: Mapped[int] = mapped_column("amount_cents", Integer)
+    currency: Mapped[str] = mapped_column(String(3), default="usd")
+    cardBrand: Mapped[str] = mapped_column("card_brand", String(16))
+    cardLast4: Mapped[str] = mapped_column("card_last4", String(4))
+    status: Mapped[str] = mapped_column(choice(SubscriptionStatus, "ck_subscriptions_status"), default="active")
+    createdAt: Mapped[datetime] = mapped_column("created_at", DateTime(timezone=True), default=utcnow)
+    # None for lifetime access.
+    currentPeriodEnd: Mapped[datetime | None] = mapped_column("current_period_end", DateTime(timezone=True))
+    licenseKey: Mapped[str] = mapped_column("license_key", String(LICENSE_KEY_LENGTH))
+
+    user: Mapped[WebUser] = relationship()

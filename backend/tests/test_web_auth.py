@@ -162,8 +162,8 @@ def test_a_short_configured_secret_is_refused(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_account_tables_live_in_their_own_database() -> None:
-    assert set(inspect(web_engine).get_table_names()) == {"users", "license_keys"}
-    assert "license_keys" not in inspect(database.engine).get_table_names()
+    assert set(inspect(web_engine).get_table_names()) == {"users", "license_keys", "subscriptions"}
+    assert {"license_keys", "subscriptions"}.isdisjoint(inspect(database.engine).get_table_names())
 
 
 # ---------------------------------------------------------------------------

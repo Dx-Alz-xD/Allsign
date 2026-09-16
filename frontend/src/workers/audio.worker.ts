@@ -14,6 +14,13 @@ export interface AudioWorkerConfig {
   minPitchHz: number;
   maxPitchHz: number;
   yinThreshold: number;
+  /**
+   * Without a dip below `yinThreshold`, the global CMND minimum still counts
+   * as voiced (at lower confidence) when it is below this. Rough or breathy
+   * voices never dip under the clean-speech threshold, and the biomarker
+   * stage needs pitch precisely then.
+   */
+  unvoicedCmnd: number;
   /** Frames quieter than this skip pitch detection and report unvoiced. */
   silenceFloorDb: number;
   inputFormat: 'f32' | 'i16';
@@ -37,9 +44,10 @@ export interface AudioAnalysisFrame {
 }
 
 /**
- * Sent straight to biomarker.worker.ts over a MessagePort, never via the main
- * thread. `hop` carries only the samples that entered the window since the last
- * packet, so the downstream ring reconstructs a gapless, non-overlapping stream.
+ * Sent straight to downstream workers (biomarker, formant) over MessagePorts,
+ * never via the main thread. `hop` carries only the samples that entered the
+ * window since the last packet, so each downstream ring reconstructs a
+ * gapless, non-overlapping stream. Every port receives its own copy.
  */
 export interface CyclePacket {
   timestamp: number;
@@ -54,11 +62,27 @@ export interface CyclePacket {
 
 export type CyclePortMessage = { type: 'recycle'; buffer: ArrayBuffer };
 
+/**
+ * Per-frame spectrum for spectral consumers (trigger.worker.ts), also sent
+ * worker-to-worker. `bins` is a pooled copy, returned with a `recycle`.
+ */
+export interface SpectralPacket {
+  timestamp: number;
+  rms: number;
+  volumeDb: number;
+  voiced: boolean;
+  pitchHz: number;
+  bins: Float32Array;
+}
+
+export type SpectralPortMessage = { type: 'recycle'; buffer: ArrayBuffer };
+
 export type AudioWorkerRequest =
   | { type: 'init'; config?: Partial<AudioWorkerConfig> }
   | { type: 'process'; buffer: ArrayBuffer; length?: number }
   | { type: 'recycle'; buffers: ArrayBuffer[] }
   | { type: 'connect'; port: MessagePort }
+  | { type: 'connectSpectral'; port: MessagePort }
   | { type: 'reset' }
   | { type: 'close' };
 
@@ -83,6 +107,7 @@ const DEFAULT_CONFIG: AudioWorkerConfig = {
   minPitchHz: 60,
   maxPitchHz: 1000,
   yinThreshold: 0.12,
+  unvoicedCmnd: 0.5,
   silenceFloorDb: -60,
   inputFormat: 'f32',
   epochMs: 0,
@@ -205,7 +230,8 @@ class AudioAnalyzer {
 
   private readonly binPool: Float32Array[] = [];
   private readonly hopPool: Float32Array[] = [];
-  private port: MessagePort | null = null;
+  private readonly ports: MessagePort[] = [];
+  private readonly spectralPorts: MessagePort[] = [];
 
   constructor(config: Partial<AudioWorkerConfig> = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -276,6 +302,7 @@ class AudioAnalyzer {
 
   reset(): void {
     this.ring.fill(0);
+    this.rawRing.fill(0);
     this.writeIndex = 0;
     this.samplesWritten = 0;
     this.sinceLastFrame = 0;
@@ -302,8 +329,7 @@ class AudioAnalyzer {
   }
 
   connect(port: MessagePort): void {
-    this.port?.close();
-    this.port = port;
+    this.ports.push(port);
     port.onmessage = (event: MessageEvent<CyclePortMessage>) => {
       const message = event.data;
       if (
@@ -316,40 +342,67 @@ class AudioAnalyzer {
     };
   }
 
+  connectSpectral(port: MessagePort): void {
+    this.spectralPorts.push(port);
+    port.onmessage = (event: MessageEvent<SpectralPortMessage>) => {
+      const message = event.data;
+      if (message?.type === 'recycle') this.releaseBins(message.buffer);
+    };
+  }
+
   disconnect(): void {
-    this.port?.close();
-    this.port = null;
+    for (const port of this.ports) port.close();
+    this.ports.length = 0;
+    for (const port of this.spectralPorts) port.close();
+    this.spectralPorts.length = 0;
+  }
+
+  private emitSpectral(frame: AudioAnalysisFrame): void {
+    for (const port of this.spectralPorts) {
+      const bins = this.takeBins();
+      bins.set(frame.spectralBins);
+      const packet: SpectralPacket = {
+        timestamp: frame.timestamp,
+        rms: frame.rms,
+        volumeDb: frame.volumeDb,
+        voiced: frame.voiced,
+        pitchHz: frame.pitchHz,
+        bins,
+      };
+      port.postMessage(packet, [bins.buffer as ArrayBuffer]);
+    }
   }
 
   private emitCyclePacket(frame: AudioAnalysisFrame): void {
-    const port = this.port;
-    if (!port) return;
+    if (this.ports.length === 0) return;
 
     const { frameSize, hopSize, sampleRate } = this.config;
-    const hop = this.hopPool.pop() ?? new Float32Array(hopSize);
-
     // The newest hopSize samples end at writeIndex, so consecutive packets are
     // contiguous and never overlap.
     const from = (this.writeIndex - hopSize + frameSize) % frameSize;
     const head = frameSize - from;
-    if (head >= hopSize) {
-      hop.set(this.rawRing.subarray(from, from + hopSize));
-    } else {
-      hop.set(this.rawRing.subarray(from), 0);
-      hop.set(this.rawRing.subarray(0, hopSize - head), head);
-    }
 
-    const packet: CyclePacket = {
-      timestamp: frame.timestamp,
-      pitchHz: frame.pitchHz,
-      pitchConfidence: frame.pitchConfidence,
-      voiced: frame.voiced,
-      rms: frame.rms,
-      sampleRate,
-      hopSize,
-      hop,
-    };
-    port.postMessage(packet, [hop.buffer as ArrayBuffer]);
+    for (const port of this.ports) {
+      const hop = this.hopPool.pop() ?? new Float32Array(hopSize);
+      if (head >= hopSize) {
+        hop.set(this.rawRing.subarray(from, from + hopSize));
+      } else {
+        hop.set(this.rawRing.subarray(from), 0);
+        hop.set(this.rawRing.subarray(0, hopSize - head), head);
+      }
+
+      const packet: CyclePacket = {
+        timestamp: frame.timestamp,
+        pitchHz: frame.pitchHz,
+        pitchConfidence: frame.pitchConfidence,
+        voiced: frame.voiced,
+        rms: frame.rms,
+        sampleRate,
+        hopSize,
+        hop,
+      };
+      port.postMessage(packet, [hop.buffer as ArrayBuffer]);
+    }
   }
 
   /** Streams a chunk in and returns every frame whose hop boundary it completed. */
@@ -382,6 +435,7 @@ class AudioAnalyzer {
         if (this.samplesWritten >= frameSize) {
           const frame = this.analyze();
           this.emitCyclePacket(frame);
+          this.emitSpectral(frame);
           frames.push(frame);
         }
       }
@@ -473,7 +527,7 @@ class AudioAnalyzer {
 
   /** YIN period in samples with parabolic refinement, or 0 when unvoiced. */
   private detectPeriod(): number {
-    const { frameSize, yinThreshold } = this.config;
+    const { frameSize, yinThreshold, unvoicedCmnd } = this.config;
     const W = this.yinWindow;
     const tauMin = this.tauMin;
     const tauMax = this.tauMax;
@@ -535,8 +589,7 @@ class AudioAnalyzer {
       for (let tau = tauMin + 1; tau < tauMax; tau++) {
         if (cmnd[tau] < cmnd[best]) best = tau;
       }
-      // Half the threshold band still counts as periodic, just less certain.
-      if (cmnd[best] >= yinThreshold * 2) return 0;
+      if (cmnd[best] >= unvoicedCmnd) return 0;
       chosen = best;
     }
 
@@ -545,11 +598,15 @@ class AudioAnalyzer {
     const prior = cmnd[chosen - 1];
     const centre = cmnd[chosen];
     const next = cmnd[chosen + 1];
+    // Only a genuine local minimum has a vertex within half a sample; a
+    // range-edge minimum would send the parabola off the end of the array.
+    if (prior < centre || next < centre) return chosen;
+    // Negative for a dip; zero only on a flat bottom.
     const denominator = 2 * (2 * centre - next - prior);
-    if (denominator === 0) return chosen;
+    if (denominator >= 0) return chosen;
 
-    const refined = chosen + (next - prior) / denominator;
-    return refined > 0 ? refined : chosen;
+    const delta = (next - prior) / denominator;
+    return chosen + Math.max(-0.5, Math.min(0.5, delta));
   }
 }
 
@@ -614,6 +671,15 @@ ctx.onmessage = (event: MessageEvent) => {
           return;
         }
         analyzer.connect(request.port);
+        break;
+      }
+
+      case 'connectSpectral': {
+        if (!analyzer) {
+          fail('Worker received a port before init');
+          return;
+        }
+        analyzer.connectSpectral(request.port);
         break;
       }
 

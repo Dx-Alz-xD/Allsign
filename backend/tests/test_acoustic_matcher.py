@@ -100,3 +100,41 @@ def test_average_fingerprint_is_the_mean_power_per_bin() -> None:
     assert am.average_fingerprint([[1.0, 2.0], [3.0, 6.0]]) == [2.0, 4.0]
     with pytest.raises(ValueError):
         am.average_fingerprint([])
+
+
+# Same spectra and values as the parity suite in frontend/src/workers/__tests__/dsp.test.ts, which checks the
+# trigger.worker.ts port. Change both files together, or the browser and the API will score triggers differently.
+PARITY_SEEDS = (0.3, 1.7, 2.9)
+PARITY_REFERENCE = {
+    "levelDb": [-29.305556, -29.7297, -30.255119],
+    "peaks": [(0, 13, 53, 93), (4, 44, 84, 124), (0, 37, 76, 116)],
+    "bandRatio": [0.98015393, 0.97534332, 0.95146228],
+    "similarity": [
+        [1.0, 0.09353773, 0.0577851],
+        [0.10969429, 1.0, 0.09364652],
+        [0.05387606, 0.11446804, 1.0],
+    ],
+}
+
+
+def parity_spectrum(seed: float) -> list[float]:
+    return [
+        10 ** ((math.sin(i / 7 + seed) * 20 + math.cos(i / 3 + seed * 2) * 8 - 60 - i / 8) / 10)
+        for i in range(am.FINGERPRINT_BINS)
+    ]
+
+
+def test_profiles_match_the_frontend_parity_reference() -> None:
+    for index, seed in enumerate(PARITY_SEEDS):
+        profile = am.spectral_profile(parity_spectrum(seed))
+        assert profile.level_db == pytest.approx(PARITY_REFERENCE["levelDb"][index], abs=5e-6)
+        assert profile.peaks == PARITY_REFERENCE["peaks"][index]
+        assert profile.band_ratio == pytest.approx(PARITY_REFERENCE["bandRatio"][index], abs=5e-8)
+
+
+def test_similarity_matches_the_frontend_parity_reference() -> None:
+    profiles = [am.spectral_profile(parity_spectrum(seed)) for seed in PARITY_SEEDS]
+    for q, query in enumerate(profiles):
+        for t, template in enumerate(profiles):
+            expected = PARITY_REFERENCE["similarity"][q][t]
+            assert am.similarity(query, template) == pytest.approx(expected, abs=5e-8)

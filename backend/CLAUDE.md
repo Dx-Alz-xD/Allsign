@@ -53,3 +53,38 @@ cd frontend
 npm run dev               # Start Next.js App Router on localhost:3000
 npm run electron:dev      # Launch Electron desktop shell wrapper
 npm run build             # Production Next.js build
+
+npm run typecheck         # tsc for the web app and the Electron main process
+npm test                  # vitest DSP suite (workers and worklets)
+```
+
+### Backend (Laptop 3)
+```bash
+cd backend
+python -m venv venv                                   # Python 3.11+
+venv/Scripts/python.exe -m pip install -r requirements-dev.txt
+venv/Scripts/python.exe -m uvicorn main:app --reload --port 8000   # API + docs at localhost:8000/docs
+venv/Scripts/python.exe -m pytest                     # full suite on an in-memory SQLite DB
+venv/Scripts/python.exe scripts/kaggle_sync.py        # fetch CMUdict + word frequencies, seed the phoneme trie
+venv/Scripts/python.exe scripts/evaluate_benchmarks.py  # regenerate EVALUATION_REPORT.md
+```
+- Run the API as a single worker: trigger profiles and signalling rooms are held in process memory.
+- `kaggle_sync.py` needs `KAGGLE_USERNAME` / `KAGGLE_KEY` in `backend/.env`; `--skip-download` re-seeds from `data/raw`.
+
+---
+
+## 6. API Surface (`/shared/types.ts` <-> `/backend/schemas.py`)
+| Endpoint | Request -> Response | Used by |
+| --- | --- | --- |
+| `GET /health`, `GET /health/live` | health report | SessionProvider backend poll |
+| `POST /api/grammar/translate` | `GrammarRequest` -> `GrammarResponse` | reconstruction panels |
+| `GET/POST /api/triggers`, `GET/PUT/PATCH/DELETE /api/triggers/{id}` | `AcousticTriggerProfile`, `AcousticTriggerUpdate` | TriggersView, trigger.worker |
+| `POST /api/triggers/match` | `AcousticMatchRequest` -> `AcousticMatchResponse` | trigger.worker fallback |
+| `GET/POST /api/presets`, `GET/PUT/DELETE /api/presets/{id}` | `ProfilePresetInput` -> `ProfilePreset` | FluencyPanel |
+| `GET/POST /api/sessions`, `GET /api/sessions/summary`, `GET/DELETE /api/sessions/{id}` | `SessionAnalyticsInput` -> `SessionAnalytics`, `SessionSummary` | AnalyticsView, SessionProvider |
+| `GET/POST /api/phonemes/targets`, `DELETE /api/phonemes/targets/{id}` | `PhonemeTargetInput` -> `PhonemeTarget` | TherapyPanel |
+| `GET /api/phonemes/lookup?prefix=W+AO&limit=10` | -> `PhonemeLookupResponse` | AphasiaPanel |
+| `WS /ws/signal/{room}?role=speaker\|caregiver` | `SignalMessage` (close 4409 = role taken) | caregiverLink.ts |
+
+- Change a contract in both files in the same commit; the frontend client is `frontend/src/lib/api/client.ts`.
+- `frontend/src/workers/trigger.worker.ts` ports `acoustic_matcher.py`; `tests/test_acoustic_matcher.py` and `src/workers/__tests__/dsp.test.ts` pin the same reference values.

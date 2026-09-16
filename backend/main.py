@@ -15,7 +15,7 @@ from pydantic import BaseModel
 import grammar_engine
 from config import get_settings
 from database import init_db
-from routers import triggers
+from routers import phonemes, presets, sessions, signalling, triggers
 
 # Garbled SOV probe so the healthcheck exercises normalization, parsing, ranking and reordering.
 PROBE_TOKENS = ["um", "me", "w-w-water", "want"]
@@ -99,6 +99,10 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 
 app.include_router(grammar_engine.router)
 app.include_router(triggers.router)
+app.include_router(presets.router)
+app.include_router(sessions.router)
+app.include_router(phonemes.router)
+app.include_router(signalling.router)
 
 
 @app.get("/health/live", response_model=LiveHealth)

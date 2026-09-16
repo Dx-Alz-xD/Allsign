@@ -97,3 +97,110 @@ export interface AcousticMatchResponse {
   silent: boolean; // below the silence floor, so nothing can match
   executionLatencyMs: number;
 }
+
+// Saved DSP presets (/api/presets)
+export type PresetParameter = number | string | boolean | null;
+
+export interface ProfilePresetInput {
+  name: string;
+  mode: ProfileMode;
+  dafDelayMs: number; // 0 - 150, 0 = DAF off
+  fsfOctaveShift: number; // -0.5 - 0.5 octaves, 0 = FSF off
+  parameters?: Record<string, PresetParameter>; // extra settings, e.g. feedbackGain; default {}
+}
+
+export interface ProfilePreset extends Required<ProfilePresetInput> {
+  id: string;
+  createdAt: string; // ISO 8601, UTC
+  updatedAt: string; // ISO 8601, UTC
+}
+
+// Session analytics (/api/sessions)
+export interface SessionAnalyticsInput {
+  profileMode: ProfileMode | null;
+  wpm: number;
+  stutterCount: number; // vocal blocks in the session
+  avgBlockDurationMs: number;
+  fluencyPercentage: number; // 0 - 100
+  sessionDurationSeconds: number; // whole seconds
+}
+
+export interface SessionAnalytics extends SessionAnalyticsInput {
+  id: string;
+  recordedAt: string; // ISO 8601, UTC
+}
+
+// GET /api/sessions/summary; averages are weighted by session length (block length by block count)
+export interface SessionSummary {
+  profileMode: ProfileMode | null; // the filter applied, null for all sessions
+  sessions: number;
+  totalSeconds: number;
+  totalStutters: number;
+  averageWpm: number;
+  averageFluencyPercentage: number;
+  averageBlockDurationMs: number;
+  firstRecordedAt: string | null;
+  lastRecordedAt: string | null;
+}
+
+// Personal articulation targets (/api/phonemes/targets)
+export interface PhonemeTargetInput {
+  phoneme: string; // IPA or ARPAbet label, 1 - 16 characters
+  exampleWord?: string | null;
+  f1: number; // Hz, > 0
+  f2: number; // Hz, > 0
+  f3: number; // Hz, > 0
+}
+
+export interface PhonemeTarget extends PhonemeTargetInput {
+  id: string;
+  exampleWord: string | null;
+  createdAt: string; // ISO 8601, UTC
+}
+
+// Word-finding cues from the phoneme prefix trie (GET /api/phonemes/lookup?prefix=W+AO&limit=10)
+export interface PhonemeLookupWord {
+  word: string;
+  arpabet: string; // with stress digits, e.g. "W AO1 T ER0"
+  frequency: number | null;
+}
+
+export interface PhonemeLookupBranch {
+  phoneme: string; // ARPAbet symbol that extends the prefix
+  wordCount: number;
+  topWord: string | null;
+}
+
+export interface PhonemeLookupResponse {
+  prefix: string[]; // normalised ARPAbet symbols, stress removed
+  found: boolean; // false when no dictionary word starts this way, or the dictionary is not seeded
+  wordCount: number;
+  words: PhonemeLookupWord[]; // most frequent first
+  next: PhonemeLookupBranch[]; // largest branch first
+}
+
+// Caregiver link. CaregiverMessage travels peer-to-peer over the WebRTC data channel and never reaches the backend.
+export type CaregiverRole = 'speaker' | 'caregiver';
+
+export interface CaregiverAlert {
+  id: string;
+  kind: 'vocal-block' | 'fatigue' | 'emergency' | 'trigger';
+  message: string;
+  timestamp: number; // epoch ms
+  durationMs?: number;
+}
+
+export type CaregiverMessage =
+  | { type: 'telemetry'; telemetry: AudioTelemetryFrame; fluency: FluencyMetrics; latencyMs: number }
+  | { type: 'alert'; alert: CaregiverAlert };
+
+// Signalling relay (WebSocket /ws/signal/{room}?role=speaker|caregiver). The relay forwards offer, answer
+// and ice to the other role and sends the rest itself. Close code 4409: that role is already taken in the room.
+export type SignalMessage =
+  | { type: 'joined'; room: string; role: CaregiverRole; peerPresent: boolean }
+  | { type: 'peer-joined'; role: CaregiverRole }
+  | { type: 'peer-left'; role: CaregiverRole }
+  | { type: 'offer'; sdp: string }
+  | { type: 'answer'; sdp: string }
+  | { type: 'ice'; candidate: string; sdpMid: string | null; sdpMLineIndex: number | null }
+  | { type: 'error'; message: string };

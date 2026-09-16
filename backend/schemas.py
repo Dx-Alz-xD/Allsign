@@ -1,5 +1,7 @@
-from pydantic import BaseModel, ConfigDict, Field, model_validator
-from typing import Annotated, List, Literal, Optional
+from datetime import datetime, timezone
+from typing import Annotated, Dict, List, Literal, Optional, Union
+
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 FINGERPRINT_BINS = 128
 MAX_SPEECH_TOKENS = 256
@@ -17,12 +19,19 @@ TriggerName = Annotated[str, Field(min_length=1, max_length=100)]
 TriggerPhrase = Annotated[str, Field(min_length=1, max_length=500)]
 TriggerThreshold = Annotated[float, Field(ge=0.0, le=1.0)]
 
+def as_utc(value: datetime) -> datetime:
+    # SQLite drops the offset, so stored timestamps come back naive; they were written in UTC.
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value.astimezone(timezone.utc)
+
+UtcDatetime = Annotated[datetime, AfterValidator(as_utc)]
+FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
+
 class GrammarRequestSchema(BaseModel):
     rawSpeechTokens: List[Annotated[str, Field(max_length=MAX_TOKEN_CHARS)]] = Field(
         ..., max_length=MAX_SPEECH_TOKENS, description="Atypical speech tokens extracted from ASR"
     )
     sourceLang: str = "en"
-    targetProfile: str = "clearvoice"
+    targetProfile: ProfileMode = "clearvoice"
 
 class GrammarResponseSchema(BaseModel):
     formattedText: str
@@ -84,9 +93,129 @@ class AcousticMatchResponse(BaseModel):
     silent: bool = Field(..., description="Below the silence floor, so nothing can match")
     executionLatencyMs: float
 
-class SessionAnalyticsSchema(BaseModel):
-    wpm: float
-    stutterCount: int
-    avgBlockDurationMs: float
-    fluencyPercentage: float
-    sessionDurationSeconds: int
+# Mirror ProfilePresetInput / ProfilePreset in shared/types.ts. Ranges follow fluencyProcessor.js.
+MAX_DAF_DELAY_MS = 150.0
+MAX_FSF_OCTAVE_SHIFT = 0.5
+MAX_PRESET_PARAMETERS = 32
+PresetName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+PresetParameterKey = Annotated[str, StringConstraints(min_length=1, max_length=64)]
+PresetParameter = Union[
+    None, bool, int, FiniteFloat, Annotated[str, StringConstraints(max_length=500)]
+]
+
+class ProfilePresetInput(BaseModel):
+    name: PresetName
+    mode: ProfileMode
+    dafDelayMs: Annotated[float, Field(ge=0.0, le=MAX_DAF_DELAY_MS)] = 0.0
+    fsfOctaveShift: Annotated[float, Field(ge=-MAX_FSF_OCTAVE_SHIFT, le=MAX_FSF_OCTAVE_SHIFT)] = 0.0
+    parameters: Annotated[
+        Dict[PresetParameterKey, PresetParameter], Field(max_length=MAX_PRESET_PARAMETERS)
+    ] = Field(default_factory=dict)
+
+class ProfilePresetOut(ProfilePresetInput):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    createdAt: UtcDatetime
+    updatedAt: UtcDatetime
+
+# Mirror SessionAnalyticsInput / SessionAnalytics / SessionSummary in shared/types.ts.
+class SessionAnalyticsInput(BaseModel):
+    profileMode: Optional[ProfileMode] = None
+    wpm: Annotated[float, Field(ge=0.0, allow_inf_nan=False)]
+    stutterCount: Annotated[int, Field(ge=0)]
+    avgBlockDurationMs: Annotated[float, Field(ge=0.0, allow_inf_nan=False)]
+    fluencyPercentage: Annotated[float, Field(ge=0.0, le=100.0)]
+    sessionDurationSeconds: Annotated[int, Field(ge=0)]
+
+class SessionAnalyticsOut(SessionAnalyticsInput):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    recordedAt: UtcDatetime
+
+class SessionSummary(BaseModel):
+    profileMode: Optional[ProfileMode] = Field(None, description="The filter applied, null for all sessions")
+    sessions: int
+    totalSeconds: int
+    totalStutters: int
+    averageWpm: float = Field(..., description="Weighted by session length")
+    averageFluencyPercentage: float = Field(..., description="Weighted by session length")
+    averageBlockDurationMs: float = Field(..., description="Weighted by block count")
+    firstRecordedAt: Optional[UtcDatetime] = None
+    lastRecordedAt: Optional[UtcDatetime] = None
+
+# Mirror PhonemeTargetInput / PhonemeTarget in shared/types.ts. Formants stay below the 8 kHz Nyquist limit.
+MAX_FORMANT_HZ = 8000.0
+Formant = Annotated[float, Field(gt=0.0, le=MAX_FORMANT_HZ)]
+
+class PhonemeTargetInput(BaseModel):
+    phoneme: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=16)]
+    exampleWord: Optional[Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]] = None
+    f1: Formant
+    f2: Formant
+    f3: Formant
+
+class PhonemeTargetOut(PhonemeTargetInput):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    createdAt: UtcDatetime
+
+# Mirror PhonemeLookupResponse in shared/types.ts.
+class PhonemeLookupWord(BaseModel):
+    word: str
+    arpabet: str
+    frequency: Optional[int] = None
+
+class PhonemeLookupBranch(BaseModel):
+    phoneme: str
+    wordCount: int
+    topWord: Optional[str] = None
+
+class PhonemeLookupResponse(BaseModel):
+    prefix: List[str] = Field(..., description="Normalised ARPAbet symbols, stress removed")
+    found: bool
+    wordCount: int
+    words: List[PhonemeLookupWord] = Field(..., description="Most frequent first")
+    next: List[PhonemeLookupBranch] = Field(..., description="Largest branch first")
+
+# Mirror CaregiverRole and SignalMessage in shared/types.ts. Peers send offer, answer and ice, which the relay
+# forwards unchanged; joined, peer-joined, peer-left and error come from the relay itself.
+CaregiverRole = Literal["speaker", "caregiver"]
+MAX_SDP_CHARS = 32_000
+MAX_ICE_CHARS = 2_000
+
+class SignalOffer(BaseModel):
+    type: Literal["offer"]
+    sdp: Annotated[str, StringConstraints(max_length=MAX_SDP_CHARS)]
+
+class SignalAnswer(BaseModel):
+    type: Literal["answer"]
+    sdp: Annotated[str, StringConstraints(max_length=MAX_SDP_CHARS)]
+
+class SignalIce(BaseModel):
+    type: Literal["ice"]
+    candidate: Annotated[str, StringConstraints(max_length=MAX_ICE_CHARS)]
+    sdpMid: Optional[Annotated[str, StringConstraints(max_length=64)]] = None
+    sdpMLineIndex: Optional[Annotated[int, Field(ge=0, le=1024)]] = None
+
+PeerSignal = Annotated[Union[SignalOffer, SignalAnswer, SignalIce], Field(discriminator="type")]
+
+class SignalJoined(BaseModel):
+    type: Literal["joined"] = "joined"
+    room: str
+    role: CaregiverRole
+    peerPresent: bool
+
+class SignalPeerJoined(BaseModel):
+    type: Literal["peer-joined"] = "peer-joined"
+    role: CaregiverRole
+
+class SignalPeerLeft(BaseModel):
+    type: Literal["peer-left"] = "peer-left"
+    role: CaregiverRole
+
+class SignalError(BaseModel):
+    type: Literal["error"] = "error"
+    message: str

@@ -146,7 +146,7 @@ class AcousticTrigger(Base):
 
 
 class SessionAnalytics(Base):
-    """Per-session fluency metrics; fields mirror SessionAnalyticsSchema."""
+    """Per-session fluency metrics; fields mirror SessionAnalyticsOut in schemas.py."""
 
     __tablename__ = "session_analytics"
 

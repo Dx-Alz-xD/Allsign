@@ -745,6 +745,14 @@ def time_database_queries(engine, scale: Scale, rng: random.Random, freeze_gc: b
 
 
 MATCH_REQUEST = "POST /api/triggers/match"
+SESSION_REQUEST = {
+    "profileMode": "fluency",
+    "wpm": 118.0,
+    "stutterCount": 4,
+    "avgBlockDurationMs": 520.0,
+    "fluencyPercentage": 93.5,
+    "sessionDurationSeconds": 600,
+}
 
 
 def time_api_round_trips(
@@ -765,6 +773,13 @@ def time_api_round_trips(
     with Session(engine) as session:
         trigger_ids = itertools.cycle(list(session.scalars(select(AcousticTrigger.id).limit(200))))
         fingerprint = session.scalars(select(AcousticTrigger.spectralFingerprint).limit(1)).one()
+        # The earliest nodes lie on the most frequent words, so these are the busiest prefixes to look up.
+        prefixes = itertools.cycle(list(session.scalars(
+            select(PhonemeTrieNode.path)
+            .where(PhonemeTrieNode.depth.between(1, 3))
+            .order_by(PhonemeTrieNode.id)
+            .limit(500)
+        )))
     match_queries = itertools.cycle([bins for _, _, bins in dataset.positives])
 
     def match_request():
@@ -795,6 +810,12 @@ def time_api_round_trips(
                  lambda: client.post("/api/triggers", json={
                      "name": "Benchmark trigger", "spectralFingerprint": fingerprint, "mappedPhrase": "Benchmark phrase",
                  })),
+                ("GET /api/phonemes/lookup", "word cues for a 1-3 phoneme prefix: top 10 words and next sounds",
+                 lambda: client.get("/api/phonemes/lookup", params={"prefix": next(prefixes), "limit": 10})),
+                ("GET /api/sessions/summary", f"length-weighted averages over {scale.session_rows:,}+ sessions",
+                 lambda: client.get("/api/sessions/summary")),
+                ("POST /api/sessions", "validate, insert one session, commit",
+                 lambda: client.post("/api/sessions", json=SESSION_REQUEST)),
             ]
             for _, _, call in specs:
                 response = call()

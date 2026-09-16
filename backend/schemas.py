@@ -2,20 +2,25 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import Annotated, List, Literal, Optional
 
 FINGERPRINT_BINS = 128
+MAX_SPEECH_TOKENS = 256
+MAX_TOKEN_CHARS = 64
 
 # Mirror ProfileMode and AcousticTriggerProfile['targetAction'] in shared/types.ts.
 ProfileMode = Literal["clearvoice", "fluency", "vocal_assist", "therapy", "aphasia", "sensory", "pitch_demo"]
 TriggerAction = Literal["DIRECT_PASTE", "TTS_SPOKEN", "WEBRTC_ALERT", "OS_HOTKEY"]
 
-# JSON has no NaN/Infinity, so a stored non-finite bin would make every later read fail to serialize.
-FiniteFloat = Annotated[float, Field(allow_inf_nan=False)]
-SpectralFingerprint = Annotated[List[FiniteFloat], Field(min_length=FINGERPRINT_BINS, max_length=FINGERPRINT_BINS)]
+# Fingerprints are 128-bin power spectra (audio.worker.ts spectralBins), so bins are >= 0. JSON has no
+# NaN/Infinity either, and a stored non-finite bin would make every later read fail to serialize.
+SpectralBin = Annotated[float, Field(ge=0.0, allow_inf_nan=False)]
+SpectralFingerprint = Annotated[List[SpectralBin], Field(min_length=FINGERPRINT_BINS, max_length=FINGERPRINT_BINS)]
 TriggerName = Annotated[str, Field(min_length=1, max_length=100)]
 TriggerPhrase = Annotated[str, Field(min_length=1, max_length=500)]
 TriggerThreshold = Annotated[float, Field(ge=0.0, le=1.0)]
 
 class GrammarRequestSchema(BaseModel):
-    rawSpeechTokens: List[str] = Field(..., description="Atypical speech tokens extracted from ASR")
+    rawSpeechTokens: List[Annotated[str, Field(max_length=MAX_TOKEN_CHARS)]] = Field(
+        ..., max_length=MAX_SPEECH_TOKENS, description="Atypical speech tokens extracted from ASR"
+    )
     sourceLang: str = "en"
     targetProfile: str = "clearvoice"
 
@@ -55,6 +60,29 @@ class AcousticTriggerOut(AcousticTriggerBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+
+class AcousticMatchRequest(BaseModel):
+    spectralFingerprint: SpectralFingerprint
+    topK: int = Field(3, ge=1, le=20, description="How many ranked candidates to return")
+
+class AcousticMatchCandidate(BaseModel):
+    triggerId: str
+    name: str
+    mappedPhrase: str
+    targetAction: TriggerAction
+    threshold: float
+    score: float = Field(..., description="Similarity, 0-1")
+    distance: float = Field(..., description="1 - score")
+
+class AcousticMatchResponse(BaseModel):
+    matched: bool
+    trigger: Optional[AcousticMatchCandidate] = Field(
+        None, description="The best candidate, present only when it clears its own threshold"
+    )
+    candidates: List[AcousticMatchCandidate] = Field(..., description="Best first")
+    levelDb: float
+    silent: bool = Field(..., description="Below the silence floor, so nothing can match")
+    executionLatencyMs: float
 
 class SessionAnalyticsSchema(BaseModel):
     wpm: float

@@ -392,3 +392,52 @@ def test_main_explains_missing_credentials(
 def test_main_skip_download_needs_raw_files(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     assert kaggle_sync.main(["--raw-dir", str(tmp_path), "--skip-download"]) == 2
     assert "run without --skip-download first" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Offensive-word filter
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "word", ["fuck", "Fucking", "motherfucker", "shitty", "bullshit", "ass", "rapist", "niggers", "wanker", "sex"]
+)
+def test_offensive_words_are_blocked(word: str) -> None:
+    assert kaggle_sync.is_blocked(word)
+
+
+@pytest.mark.parametrize(
+    "word",
+    ["assess", "class", "cockpit", "cocktail", "dickens", "niggle", "grape", "rapeseed", "therapist", "hello",
+     "shiitake", "scunthorpe", "wankel", "analysis", "sextant", "cat"],
+)
+def test_ordinary_words_are_not_blocked(word: str) -> None:
+    assert not kaggle_sync.is_blocked(word)
+
+
+def test_blocked_words_never_become_cues_or_practice_words(tmp_path: Path) -> None:
+    folder = tmp_path / CMUDICT.folder
+    folder.mkdir()
+    (folder / "cmudict.phones").write_text(PHONES, encoding="utf-8")
+    (folder / "cmudict.dict").write_text(
+        "cat K AE1 T\ncunt K AH1 N T\ncock K AA1 K\nass AE1 S\nassess AH0 S EH1 S\n", encoding="utf-8"
+    )
+    (tmp_path / WORD_FREQUENCY.folder).mkdir()
+    (tmp_path / WORD_FREQUENCY.folder / "unigram_freq.csv").write_text(
+        "word,count\ncunt,900\ncock,800\nass,700\ncat,600\nassess,500\nfucking,400\n", encoding="utf-8"
+    )
+
+    frequencies = kaggle_sync.parse_word_frequencies(tmp_path / WORD_FREQUENCY.folder / "unigram_freq.csv")
+    assert frequencies == {"cat": 600, "assess": 500}
+
+    summary = seed(tmp_path)
+    assert (summary.pronunciations, summary.trie_words) == (5, 2)
+    with Session(engine) as session:
+        assert words_under(session, "K") == ["cat"]
+        assert node(session, "").topWord == "cat"
+        targets = set(session.scalars(select(PhonemeTargetWord.word)))
+        assert targets == {"cat", "assess"}
+        # Blocked words stay in the pronunciation table (complete lookups) but carry no frequency.
+        blocked = session.execute(
+            select(Pronunciation.word, Pronunciation.frequency, Pronunciation.trieNodeId)
+            .where(Pronunciation.word.in_(["cunt", "cock", "ass"]))
+        ).all()
+        assert sorted(blocked) == [("ass", None, None), ("cock", None, None), ("cunt", None, None)]

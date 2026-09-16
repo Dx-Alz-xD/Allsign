@@ -48,6 +48,9 @@ def _sqlite_connection_setup(write_ahead_log: bool):
 
 def create_database_engine(raw_url: str) -> Engine:
     url = resolve_database_url(raw_url)
+    if url.get_backend_name() == "sqlite" and not _is_sqlite_memory(url):
+        # SQLite creates the file but not its folder (e.g. a fresh checkout without backend/data/).
+        Path(url.database).parent.mkdir(parents=True, exist_ok=True)
     new_engine = create_engine(url, **_engine_options(url))
     if new_engine.dialect.name == "sqlite":
         event.listen(new_engine, "connect", _sqlite_connection_setup(write_ahead_log=not _is_sqlite_memory(url)))

@@ -113,10 +113,19 @@ def test_database_rejects_invalid_rows(row) -> None:
 
 
 def test_file_database_uses_write_ahead_log_and_foreign_keys(tmp_path: Path) -> None:
-    file_engine = create_database_engine(f"sqlite:///{tmp_path / 'app.db'}")
+    path = tmp_path / "fresh-checkout" / "data" / "omnivoice.db"
+    file_engine = create_database_engine(f"sqlite:///{path}")
     try:
         with file_engine.connect() as connection:
             assert connection.execute(text("PRAGMA journal_mode")).scalar() == "wal"
             assert connection.execute(text("PRAGMA foreign_keys")).scalar() == 1
+        assert path.is_file()
     finally:
         file_engine.dispose()
+
+
+def test_relative_sqlite_paths_resolve_inside_backend() -> None:
+    from database import BACKEND_DIR, resolve_database_url
+
+    assert Path(resolve_database_url("sqlite:///./data/omnivoice.db").database) == BACKEND_DIR / "data" / "omnivoice.db"
+    assert resolve_database_url("sqlite://").database in (None, "")

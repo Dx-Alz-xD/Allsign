@@ -9,17 +9,28 @@ frontend/dist-electron/
 # Python & ML
 __pycache__/
 *.pyc
+venv/
 backend/venv/
-backend/.env
-backend/data/
+.pytest_cache/
 *.onnx
 *.pt
+
+# Secrets
+.env
+.env*.local
+backend/.env
+
+# Local data: SQLite files (including WAL side files) and downloaded datasets
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+backend/data/
+backend/data/raw/
 
 # OS files
 .DS_Store
 Thumbs.db
 
-# Env & TypeScript
-.env.local
-.env.*.local
+# TypeScript incremental build info
 *.tsbuildinfo

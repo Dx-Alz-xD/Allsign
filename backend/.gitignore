@@ -1,3 +1,8 @@
 .env
 __pycache__/
 .pytest_cache/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/

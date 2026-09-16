@@ -3,3 +3,5 @@ uvicorn[standard]>=0.30
 pydantic>=2.7
 pydantic-settings>=2.4
 nltk>=3.9
+sqlalchemy>=2.0
+kagglehub>=1.0

@@ -1,15 +1,21 @@
 import gc
+import math
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 import grammar_engine
 from config import get_settings
+from database import init_db
+from routers import triggers
 
 # Garbled SOV probe so the healthcheck exercises normalization, parsing, ranking and reordering.
 PROBE_TOKENS = ["um", "me", "w-w-water", "want"]
@@ -44,6 +50,16 @@ def time_probe_parse() -> float:
     return result.latency_ms
 
 
+def json_safe(value: Any) -> Any:
+    if isinstance(value, float) and not math.isfinite(value):
+        return str(value)
+    if isinstance(value, dict):
+        return {key: json_safe(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [json_safe(item) for item in value]
+    return value
+
+
 def uptime_seconds(request: Request) -> float:
     return round(time.monotonic() - request.app.state.started_monotonic, 3)
 
@@ -52,6 +68,7 @@ def uptime_seconds(request: Request) -> float:
 async def lifespan(app: FastAPI):
     app.state.started_at = datetime.now(timezone.utc)
     app.state.started_monotonic = time.monotonic()
+    init_db()
     # Warm-up parse: fails startup on a broken grammar and keeps the first healthcheck from reading cold.
     time_probe_parse()
     # Exempt the startup heap from GC scans; full collections over it stalled parses by 10-30ms.
@@ -70,7 +87,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
+    # Same body as FastAPI's default, but the echoed input may hold NaN/Infinity (Python's JSON decoder
+    # accepts them), which would otherwise make the 422 itself fail to serialize and surface as a 500.
+    return JSONResponse(status_code=422, content={"detail": json_safe(jsonable_encoder(exc.errors()))})
+
+
 app.include_router(grammar_engine.router)
+app.include_router(triggers.router)
 
 
 @app.get("/health/live", response_model=LiveHealth)

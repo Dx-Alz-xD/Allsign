@@ -101,17 +101,6 @@ def test_translation(case: GrammarCase) -> None:
     assert "\n" not in result.parsed_tree and result.parsed_tree.startswith("(ROOT")
 
 
-@pytest.fixture(scope="module")
-def client():
-    # Imported here so scripts/evaluate_benchmarks.py can reuse CASES without loading the app.
-    from fastapi.testclient import TestClient
-
-    import main
-
-    with TestClient(main.app) as test_client:
-        yield test_client
-
-
 def test_translate_endpoint_returns_contract_fields(client: "TestClient") -> None:
     response = client.post(
         "/api/grammar/translate",
@@ -123,6 +112,14 @@ def test_translate_endpoint_returns_contract_fields(client: "TestClient") -> Non
     assert body["originalTokens"] == ["me", "water", "want"]
     assert body["parsedTree"] == "(ROOT (S (NP (PRON I)) (VP (V want) (NP (N water)))))"
     assert body["executionLatencyMs"] >= 0
+
+
+def test_translate_endpoint_rejects_non_json_numbers(client: "TestClient") -> None:
+    response = client.post(
+        "/api/grammar/translate", content='{"rawSpeechTokens": [NaN]}', headers={"Content-Type": "application/json"}
+    )
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["input"] == "nan"
 
 
 def test_translate_endpoint_rejects_unsupported_language(client: "TestClient") -> None:

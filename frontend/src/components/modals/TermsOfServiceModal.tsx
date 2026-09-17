@@ -15,7 +15,7 @@ const KEY_POINTS: readonly string[] = [
   'Voicematics is an assistive communication tool, not a medical device.',
   'It does not diagnose, treat, or monitor any health condition.',
   'The emergency alert does not contact emergency services.',
-  'Check reconstructed text, including second answers and clinical report summaries written by AI, before you share it.',
+  'Check reconstructed text, including the second answer written by AI, before you share or send it.',
   'You have the right to use Voicematics in whatever way works for you, with any assistive technology.',
 ];
 
@@ -208,7 +208,7 @@ export function TermsOfServiceModal({ open, onClose, section }: TermsOfServiceMo
           <p>
             <strong>Free</strong> includes ClearVoice, the Sensory HUD, Studio, and one gesture.{' '}
             <strong>Pro</strong> and <strong>Lifetime</strong> add the Fluency Coach, Therapy Mode, unlimited triggers, sharing
-            over the Caregiver Link, session analytics, and clinical reports. Plans are bought and managed on the Voicematics
+            over the Caregiver Link, and session analytics. Plans are bought and managed on the Voicematics
             website.
           </p>
           <p>
@@ -218,9 +218,8 @@ export function TermsOfServiceModal({ open, onClose, section }: TermsOfServiceMo
             delete, and triggers beyond the Free limit are paused until you upgrade again.
           </p>
           <p>
-            Clinical reports compute their numbers from your measurements, and an AI model writes the summary paragraph. The
-            summary can be wrong. A report is not a diagnosis and does not replace a clinician&apos;s judgement. The second
-            answer in ClearVoice and Aphasia Mode is also written by an AI model and can guess wrong about what you meant.
+            The second answer in ClearVoice is written by an AI model and can guess wrong about what you meant. Voice
+            measurements and session analytics are not a diagnosis and do not replace a clinician&apos;s judgement.
           </p>
         </Section>
 

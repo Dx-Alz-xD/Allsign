@@ -6,7 +6,7 @@
  * paste and trigger actions. Views read it with `useSession()`.
  *
  * Nothing starts until `startMicrophone()` is called from a user gesture.
- * Until then the telemetry store holds silent frames; Pitch Demo mode can
+ * Until then the telemetry store holds silent frames; Studio can
  * fall back to the built-in simulated signal.
  *
  * Speech path: every token source (typed text, system dictation, the Pitch
@@ -16,7 +16,7 @@
  * (nut.js through the desktop bridge) and to the caregiver data channel's
  * broadcast queue.
  *
- * In ClearVoice and Aphasia Mode, once a translation is on screen, Gemini is
+ * In ClearVoice, once a translation is on screen, Gemini is
  * asked for a context-aware second answer (POST /api/agent/refine-sentence)
  * with the last few sentences. It is shown under the grammar engine's
  * sentence and never delays or replaces it.
@@ -70,7 +70,7 @@ const MAX_TRANSCRIPTS = 30;
 const MIN_SESSION_SECONDS = 5;
 /** backend grammar_engine.LATENCY_BUDGET_MS, until the health check reports it. */
 const DEFAULT_AST_BUDGET_MS = 10;
-/** Pitch Mode replays one demo sentence through the real grammar engine this often. */
+/** Studio replays one demo sentence through the real grammar engine this often. */
 const DEMO_SENTENCE_INTERVAL_MS = 8000;
 const CLIENT_ID_STORAGE_KEY = 'omnivoice:caregiver-client-id';
 const RAW_TRANSCRIPT_KEY = 'omnivoice:raw-transcript';
@@ -110,7 +110,7 @@ const REFINE_MAX_SENTENCE_CHARS = 500;
 
 /** The profiles that show a second, Gemini-written answer under the grammar engine's sentence. */
 function refineProfileOf(profile: ProfileMode): RefineProfile | null {
-  return profile === 'clearvoice' || profile === 'aphasia' ? profile : null;
+  return profile === 'clearvoice' ? profile : null;
 }
 
 function refinementFailure(cause: unknown): string {
@@ -121,6 +121,17 @@ function refinementFailure(cause: unknown): string {
   }
   if (cause instanceof DOMException && cause.name === 'AbortError') return 'Gemini took too long to answer.';
   return 'Could not reach the server for the Gemini answer.';
+}
+
+const NOTIFY_KINDS: Partial<Record<CaregiverAlert['kind'], string>> = { emergency: 'Emergency alert', message: 'Message', trigger: 'Alert' };
+
+/** A system notification for an alert from the other device, when Voicematics is not the window in front. */
+function notifyAlert(alert: CaregiverAlert): void {
+  const title = NOTIFY_KINDS[alert.kind];
+  if (!title || typeof Notification === 'undefined' || document.hasFocus()) return;
+  const show = () => new Notification(`Voicematics: ${title}${alert.origin === 'phone' ? ' from the speaker’s phone' : ''}`, { body: alert.message, tag: alert.id, requireInteraction: alert.kind === 'emergency' });
+  if (Notification.permission === 'granted') show();
+  else if (Notification.permission === 'default') void Notification.requestPermission().then((result) => result === 'granted' && show());
 }
 
 /** One id per browser tab, kept across reloads, so the relay lets a reloaded tab take its role back. */
@@ -154,7 +165,7 @@ export interface SessionContextValue {
   pipeline: AudioPipeline;
   /** Live telemetry (silent frames while idle). */
   telemetry: TelemetrySource;
-  /** Simulated telemetry for Pitch Demo when the microphone is off. */
+  /** Simulated telemetry for Studio when the microphone is off. */
   demoTelemetry: TelemetrySource;
   isSimulated: boolean;
 
@@ -174,7 +185,7 @@ export interface SessionContextValue {
   grammarBusy: boolean;
   /** Gemini's context-aware answer for the shown sentence; null when it was not asked for one. */
   refinement: SentenceRefinement | null;
-  /** Whether ClearVoice and Aphasia Mode ask Gemini for that second answer (saved in settings). */
+  /** Whether ClearVoice asks Gemini for that second answer (saved in settings). */
   geminiAnswer: boolean;
   setGeminiAnswer: (enabled: boolean) => void;
   interimTokens: string[];
@@ -220,8 +231,7 @@ export interface SessionContextValue {
 
   /** Saves the session to the account's history; null when it is too short or the plan has no analytics. */
   recordSession: () => Promise<SessionAnalytics | null>;
-  /** Biomarker samples, feedback changes and blocks of the current session, for a clinical report. */
-  /** Starts the session statistics and the report log over, keeping the microphone on. */
+  /** Starts the session statistics over, keeping the microphone on. */
   startNewSession: () => void;
 }
 
@@ -308,11 +318,16 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
   const geminiAnswer = settings.speech.geminiAnswer;
   const geminiAnswerRef = useRef(geminiAnswer);
   geminiAnswerRef.current = geminiAnswer;
+  const pasteWhatRef = useRef(settings.speech.pasteWhat);
+  pasteWhatRef.current = settings.speech.pasteWhat;
+  /** Gemini answers are typed in the order their sentences were spoken, whichever comes back first. */
+  const geminiPasteRef = useRef<Promise<void>>(Promise.resolve());
   /** Recent sentences, oldest first: Gemini's answer where it gave one, otherwise the grammar engine's. */
   const conversationRef = useRef<{ text: string }[]>([]);
 
   const pushAlert = useCallback((alert: CaregiverAlert) => {
-    setAlerts((current) => [alert, ...current].slice(0, MAX_ALERTS));
+    // A phone alert can arrive again after a reconnect until the relay has this device's acknowledgement.
+    setAlerts((current) => [alert, ...current.filter((item) => item.id !== alert.id)].slice(0, MAX_ALERTS));
   }, []);
 
   /** Best effort, for live telemetry only. */
@@ -486,7 +501,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
     return () => window.clearInterval(timer);
   }, [broadcastToCaregiver, getHudFrame, pipeline.snapshotRef, postSpeech, pushAlert, sendToCaregiver, telemetry]);
 
-  // Pitch Demo keeps the simulated signal while no microphone runs.
+  // Studio keeps the simulated signal while no microphone runs.
   const isSimulated = profile === 'pitch_demo' && !live;
   useEffect(() => {
     if (!isSimulated) return;
@@ -538,7 +553,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
     [pasteQueue],
   );
 
-  const requestRefinement = useCallback((response: GrammarResponse, profileMode: RefineProfile) => {
+  const requestRefinement = useCallback((response: GrammarResponse, profileMode: RefineProfile, paste: boolean) => {
     const context = conversationRef.current.map((entry) => entry.text);
     const entry = { text: response.formattedText.slice(0, REFINE_MAX_SENTENCE_CHARS) };
     conversationRef.current = [...conversationRef.current, entry].slice(-REFINE_CONTEXT_SENTENCES);
@@ -546,14 +561,26 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
     const started = performance.now();
     // Only the answer for the newest sentence is shown; an older one arriving late just updates the context.
     const settle = (next: SentenceRefinement) => setRefinement((current) => (current?.grammar === response ? next : current));
-    api.agent
+    const answered = api.agent
       .refineSentence({ rawTokens: response.originalTokens, draft: entry.text, profileMode, context })
       .then((answer) => {
         entry.text = answer.text.slice(0, REFINE_MAX_SENTENCE_CHARS);
         settle({ status: 'ready', grammar: response, text: answer.text, modelName: answer.modelName, latencyMs: performance.now() - started });
+        return answer.text;
       })
-      .catch((cause: unknown) => settle({ status: 'failed', grammar: response, message: refinementFailure(cause) }));
-  }, []);
+      .catch((cause: unknown) => {
+        settle({ status: 'failed', grammar: response, message: refinementFailure(cause) });
+        // Direct paste still types something: the grammar engine's sentence.
+        return response.formattedText;
+      });
+    if (paste) {
+      geminiPasteRef.current = geminiPasteRef.current
+        .then(() => answered)
+        .then((text) => {
+          if (text && directPasteRef.current) pasteQueue.enqueue(text);
+        });
+    }
+  }, [pasteQueue]);
 
   const setGeminiAnswer = useCallback(
     (enabled: boolean) => {
@@ -590,13 +617,18 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
           setGrammarError(null);
           setInterimTokens([]);
 
+          const refineProfile = refineProfileOf(profileRef.current);
+          const refine = utterance.source !== 'demo' && refineProfile !== null && geminiAnswerRef.current && response.originalTokens.length > 0;
           // Demo sentences are for the screen, never typed into someone's apps.
-          if (utterance.source !== 'demo' && directPasteRef.current && response.formattedText) {
+          const pasteWhat = utterance.source !== 'demo' && directPasteRef.current ? pasteWhatRef.current : null;
+          if (pasteWhat === 'heard') {
+            // Recognised speech was typed the moment it was heard (onRecognition); typed words go out as written.
+            if (utterance.source !== 'on-device') pasteQueue.enqueue(utterance.tokens.join(' '));
+          } else if ((pasteWhat === 'quick' || (pasteWhat === 'gemini' && !refine)) && response.formattedText) {
             pasteQueue.enqueue(response.formattedText);
           }
-          const refineProfile = refineProfileOf(profileRef.current);
-          if (utterance.source !== 'demo' && refineProfile && geminiAnswerRef.current && response.originalTokens.length > 0) {
-            requestRefinement(response, refineProfile);
+          if (refine && refineProfile) {
+            requestRefinement(response, refineProfile, pasteWhat === 'gemini');
           } else {
             setRefinement(null);
           }
@@ -701,10 +733,12 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
         saveRawTranscript(next);
         return next;
       });
+      // Exactly what was heard, stutters included, typed without waiting for the grammar server.
+      if (directPasteRef.current && pasteWhatRef.current === 'heard') pasteQueue.enqueue(text);
       const tokens = tokenize(text);
       if (tokens.length > 0) postSpeech({ type: 'tokens', tokens, final: true, source: 'on-device', endOfUtterance: true });
     },
-    [postSpeech],
+    [pasteQueue, postSpeech],
   );
   const onRecognitionRef = useRef(onRecognition);
   onRecognitionRef.current = onRecognition;
@@ -723,12 +757,21 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       }
       if (engine.getSnapshot().state !== 'running') {
         await engine.start({ inputDeviceId: settings.audio.inputDeviceId, outputDeviceId: settings.audio.outputDeviceId });
+        const started = engine.getSnapshot();
+        if (started.state !== 'running') {
+          // No microphone, no listening: say why instead of downloading a model that will never hear anything.
+          listeningRef.current = false;
+          setListeningState(false);
+          setWarning(`Listening did not start: ${started.error ?? 'the microphone could not be opened.'}`);
+          return;
+        }
         const port = engine.capturePort;
         if (port) attachCapture(port, (message) => engine.handleCaptureMessage(message));
         engine.applyFluency(feedback);
         engine.setFeedbackEnabled(feedbackEnabled);
         resetPipeline();
       }
+      if (!listeningRef.current) return;
       const recognizerInstance = new Recognizer({ onState: setRecognizer, onResult: (result) => onRecognitionRef.current(result) }, settings.speech.recognizerModel);
       recognizerRef.current = recognizerInstance;
       recorderRef.current = new UtteranceRecorder({
@@ -747,6 +790,13 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
     },
     [],
   );
+
+  // Direct paste works from the voice: switching it on starts listening. Stopping listening afterwards is respected.
+  const setListeningRef = useRef(setListening);
+  setListeningRef.current = setListening;
+  useEffect(() => {
+    if (directPasteActive && !listeningRef.current) void setListeningRef.current(true);
+  }, [directPasteActive]);
 
   const clearRawTranscript = useCallback(() => {
     setRawTranscript([]);
@@ -805,6 +855,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
           switch (message.type) {
             case 'alert':
               pushAlert(message.alert);
+              notifyAlert(message.alert);
               return;
             case 'transcript':
               setRemoteTranscripts((current) =>
@@ -845,7 +896,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
     return isSimulated ? simulatedPeerAt(2) : toPeerLinkState(null);
   }, [isSimulated, link]);
 
-  // Pitch Mode without a microphone replays demo sentences through speech.worker and the real grammar engine,
+  // Studio without a microphone replays demo sentences through speech.worker and the real grammar engine,
   // so the AST output and its latency on screen are genuine.
   useEffect(() => {
     if (!isSimulated || backendOnline !== true) return;

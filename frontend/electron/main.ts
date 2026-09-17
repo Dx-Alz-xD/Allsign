@@ -88,7 +88,7 @@ function handleHotkey(action: HotkeyAction): void {
   const win = mainWindow;
   if (!win || win.isDestroyed()) return;
 
-  // An emergency alert must be seen, and Pitch Mode is a presentation view; muting stays in the background.
+  // An emergency alert must be seen, and Studio is a presentation view; muting stays in the background.
   if (action === 'emergency-alert' || action === 'toggle-pitch-mode') bringToFront(win);
   if (action === 'emergency-alert') {
     win.flashFrame(true);

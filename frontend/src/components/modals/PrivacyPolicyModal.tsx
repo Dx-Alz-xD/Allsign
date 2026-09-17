@@ -38,7 +38,7 @@ const COMMITMENTS: ReadonlyArray<{ icon: LucideIcon; title: string; body: string
   {
     icon: Sparkles,
     title: 'AI only where you can see it',
-    body: 'Clinical reports, the website assistant, and the second answer in ClearVoice and Aphasia Mode send text to Google Gemini or Groq. Audio never does, and the second answer can be switched off.',
+    body: 'Only the second answer in ClearVoice sends text to an AI model (Google Gemini, or Groq if Gemini fails). Audio never does, and the second answer can be switched off.',
   },
   {
     icon: EyeOff,
@@ -128,20 +128,12 @@ function useDeviceChecks(): DeviceCheck[] {
     });
 
     checks.push({
-      label: 'Second answer in ClearVoice and Aphasia Mode',
+      label: 'Second answer in ClearVoice',
       value: geminiAnswer ? 'On' : 'Off',
       detail: geminiAnswer
         ? 'Each rebuilt sentence’s words (never audio) and your last few sentences go to the Voicematics server, which asks Google Gemini, or Groq if Gemini fails, for a context-aware answer. Answers are not saved on the server. Switch it off next to the text box.'
         : 'Rebuilt sentences come from grammar rules only; nothing you say goes to an AI model.',
       tone: geminiAnswer ? 'leaves-device' : 'local',
-    });
-
-    checks.push({
-      label: 'Clinical reports',
-      value: 'Only when you ask for one',
-      detail:
-        'The session’s voice measurements (never audio) go to the Voicematics server, which asks Google Gemini, or Groq if Gemini fails, to write the summary. Reports are not saved on the server.',
-      tone: 'info',
     });
 
     checks.push({
@@ -351,8 +343,7 @@ export function PrivacyPolicyModal({ open, onClose }: { open: boolean; onClose: 
             </li>
             <li>
               <strong>Voice measurements</strong> such as pitch, jitter, shimmer, and vocal strain. Shown live. With
-              session analytics, session summaries (speaking rate, block counts, fluency) are saved to your account. With
-              a clinical report, the session&apos;s measurements are sent once to write it.
+              session analytics, session summaries (speaking rate, block counts, fluency) are saved to your account.
             </li>
             <li>
               <strong>Recognized words and reconstructed sentences.</strong> Sent to the Voicematics server to be rebuilt
@@ -389,17 +380,15 @@ export function PrivacyPolicyModal({ open, onClose }: { open: boolean; onClose: 
             </li>
             <li>Recognized words go to the Voicematics server to be rebuilt into sentences.</li>
             <li>
-              The second answer in ClearVoice and Aphasia Mode is on. Each sentence&apos;s words and your last few sentences
+              The second answer in ClearVoice is on. Each sentence&apos;s words and your last few sentences
               go to the Voicematics server and on to Google Gemini or Groq, whose own privacy terms apply to that request.
             </li>
             <li>
               You connect a caregiver. Shared alerts, readings, and rebuilt sentences travel encrypted between the two
               devices, through a relay only if a direct connection fails. The Voicematics server sets up the connection and
-              sees the room code and IP addresses, never the shared data.
-            </li>
-            <li>
-              You ask for a clinical report. The session&apos;s measurements go to the Voicematics server and on to Google
-              Gemini or Groq, whose own privacy terms apply to that request.
+              sees the room code and IP addresses, never the shared data. Alerts you send from your phone&apos;s alert button
+              are the exception: the server passes them to the caregiver, holding them up to 10 minutes if nobody is
+              connected, and does not keep them afterwards.
             </li>
             <li>
               You use direct paste. The text becomes part of the app you paste into, such as Slack, Word, Zoom, or
@@ -415,8 +404,8 @@ export function PrivacyPolicyModal({ open, onClose }: { open: boolean; onClose: 
           <p>
             <strong>HIPAA.</strong> Voicematics stores account data on its server and is not offered as a HIPAA-covered
             service. If a clinic uses Voicematics with patients, the clinic remains responsible for its own HIPAA
-            obligations, including deciding whether session data may be saved to Voicematics accounts and whether clinical
-            reports and second answers may be written with a third-party AI provider.
+            obligations, including deciding whether session data may be saved to Voicematics accounts and whether second
+            answers may be written with a third-party AI provider.
           </p>
           <p>
             <strong>GDPR.</strong> Voicematics collects only what the features you use need, keeps it with your account,

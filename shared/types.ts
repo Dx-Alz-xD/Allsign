@@ -184,13 +184,14 @@ export type CaregiverRole = 'speaker' | 'caregiver';
 
 export interface CaregiverAlert {
   id: string;
-  kind: 'vocal-block' | 'fatigue' | 'emergency' | 'trigger';
+  kind: 'vocal-block' | 'fatigue' | 'emergency' | 'trigger' | 'message'; // message: a quick note sent from the speaker's phone
   message: string;
   timestamp: number; // epoch ms
   durationMs?: number;
+  origin?: 'phone'; // raised on the speaker's phone and relayed by the server, not sent by the desktop app
 }
 
-// Where a reconstructed sentence came from: typed text, opt-in system dictation, or the Pitch Mode demo script.
+// Where a reconstructed sentence came from: typed text, opt-in system dictation, or the Studio demo script.
 export type SpeechSource = 'manual' | 'system-dictation' | 'on-device' | 'demo'; // on-device: the app's own Whisper, verbatim
 
 // A reconstructed sentence shared with the caregiver as soon as the grammar engine returns it.
@@ -207,13 +208,31 @@ export type CaregiverMessage =
   | { type: 'alert'; alert: CaregiverAlert }
   | { type: 'transcript'; transcript: CaregiverTranscript };
 
-// Signalling relay (WebSocket /ws/signal/{room}?role=speaker|caregiver&client=<id>). The relay forwards offer,
-// answer and ice to the other role and sends the rest itself. The session token goes in the subprotocols, never the
-// URL: offer ['voicematics.signal', 'voicematics.token.<token>']. Close codes: 4401 the speaker has no valid session,
-// 4402 the speaker's plan has no caregiver_link, 4409 the role is taken by another device, 4410 this device
-// reconnected and the newer connection replaced this one.
+// Signalling relay (WebSocket /ws/signal/{room}?role=speaker|caregiver|alerter&client=<id>). The relay forwards offer,
+// answer and ice between speaker and caregiver and sends the rest itself. The session token goes in the subprotocols,
+// never the URL: offer ['voicematics.signal', 'voicematics.token.<token>']. Close codes: 4401 the speaker or phone has
+// no valid session, 4402 its plan has no caregiver_link, 4403 the phone's account is not the speaker's, 4409 the role
+// is taken by another device, 4410 this device reconnected and the newer connection replaced this one.
+//
+// `alerter` is the speaker's phone: it sends PhoneAlertRequest and nothing else. The relay delivers the alert to the
+// caregiver and the speaker as { type: 'alert' } and keeps it (up to 10 minutes) until a caregiver answers
+// { type: 'alert-ack', id }, resending it to every caregiver that joins meanwhile. The phone hears { type: 'alert-sent' }
+// (delivered: a caregiver was in the room) and { type: 'alert-received' } once one acknowledged it. For the phone,
+// peerPresent / peer-joined / peer-left are about the caregiver.
+export type SignalRole = CaregiverRole | 'alerter';
+
+export interface PhoneAlertRequest {
+  type: 'alert';
+  kind: 'emergency' | 'message';
+  message: string; // 1 - 200 characters
+}
+
 export type SignalMessage =
-  | { type: 'joined'; room: string; role: CaregiverRole; peerPresent: boolean }
+  | { type: 'joined'; room: string; role: SignalRole; peerPresent: boolean }
+  | { type: 'alert'; alert: CaregiverAlert }
+  | { type: 'alert-sent'; id: string; delivered: boolean }
+  | { type: 'alert-ack'; id: string }
+  | { type: 'alert-received'; id: string }
   | { type: 'peer-joined'; role: CaregiverRole }
   | { type: 'peer-left'; role: CaregiverRole }
   | { type: 'offer'; sdp: string }

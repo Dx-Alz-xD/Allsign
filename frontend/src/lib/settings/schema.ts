@@ -34,12 +34,16 @@ export interface NetworkSettings {
 }
 
 export type RecognizerModel = 'tiny' | 'base' | 'small';
+/** What direct paste types: the words exactly as heard, the grammar engine's sentence, or Gemini's answer. */
+export type PasteWhat = 'heard' | 'quick' | 'gemini';
+export const PASTE_WHAT_VALUES: readonly PasteWhat[] = ['heard', 'quick', 'gemini'];
 
 export interface SpeechSettings {
   /** ClearVoice also asks Gemini for a context-aware second answer. */
   geminiAnswer: boolean;
   /** The on-device Whisper model: bigger is more accurate and slower to load. */
   recognizerModel: RecognizerModel;
+  pasteWhat: PasteWhat;
 }
 
 export interface LegalSettings {
@@ -79,7 +83,7 @@ export function defaultSettings(): AppSettings {
       outputLabel: '',
     },
     network: defaultNetworkSettings(),
-    speech: { geminiAnswer: true, recognizerModel: 'base' },
+    speech: { geminiAnswer: true, recognizerModel: 'base', pasteWhat: 'heard' },
     legal: { termsVersion: null, termsAcknowledgedAt: null },
   };
 }
@@ -127,6 +131,7 @@ export function parseSettings(input: unknown): AppSettings {
     speech: {
       geminiAnswer: typeof speech.geminiAnswer === 'boolean' ? speech.geminiAnswer : fallback.speech.geminiAnswer,
       recognizerModel: speech.recognizerModel === 'tiny' || speech.recognizerModel === 'small' ? speech.recognizerModel : 'base',
+      pasteWhat: PASTE_WHAT_VALUES.includes(speech.pasteWhat as PasteWhat) ? (speech.pasteWhat as PasteWhat) : fallback.speech.pasteWhat,
     },
     legal: {
       termsVersion: typeof legal.termsVersion === 'string' ? legal.termsVersion : null,

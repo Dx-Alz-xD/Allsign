@@ -8,7 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { animate } from 'animejs';
-import { Activity, Bell, BellOff, Copy, Link2, Link2Off, MessageSquareText, Radio, Siren, TriangleAlert, Volume2, VolumeX } from 'lucide-react';
+import { Activity, Bell, BellOff, Copy, Link2, Link2Off, MessageSquareText, Radio, Siren, Smartphone, TriangleAlert, Volume2, VolumeX } from 'lucide-react';
 import type { CaregiverAlert, CaregiverMessage, CaregiverTranscript } from '@shared/types';
 import { CaregiverLink, generateClientId, type CaregiverLinkState, type LinkStatus } from '@/lib/peer/caregiverLink';
 import { backendWebSocketUrl, iceServers } from '@/lib/api';
@@ -48,6 +48,7 @@ const ALERT_LABEL: Record<CaregiverAlert['kind'], string> = {
   fatigue: 'Vocal strain',
   emergency: 'Emergency',
   trigger: 'Trigger',
+  message: 'Message',
 };
 
 interface Live {
@@ -139,7 +140,7 @@ export function CaregiverConsole({ initialRoom }: { initialRoom: string }) {
       setAlerts((current) => [alert, ...current.filter((item) => item.id !== alert.id)].slice(0, MAX_ALERTS));
       if (soundRef.current) chime(alert.kind === 'emergency');
       if (notifyRef.current === 'granted' && document.visibilityState !== 'visible') {
-        new Notification(`Voicematics: ${ALERT_LABEL[alert.kind]}`, { body: alert.message, tag: alert.id });
+        new Notification(`Voicematics: ${ALERT_LABEL[alert.kind]}${alert.origin === 'phone' ? ' from their phone' : ''}`, { body: alert.message, tag: alert.id });
       }
       return;
     }
@@ -225,7 +226,7 @@ export function CaregiverConsole({ initialRoom }: { initialRoom: string }) {
         <div role="alert" className="flex items-start gap-3 rounded-2xl border-2 border-crimson bg-crimson/15 p-5 shadow-[0_0_40px_-10px_#FF3333] motion-safe:animate-pulse">
           <Siren aria-hidden className="mt-0.5 size-7 shrink-0 text-crimson" />
           <div className="min-w-0">
-            <p className="font-display text-xl font-bold text-bone">Emergency alert from the speaker</p>
+            <p className="font-display text-xl font-bold text-bone">Emergency alert from the speaker{emergency.origin === 'phone' ? '’s phone' : ''}</p>
             <p className="mt-1 text-bone">{emergency.message}</p>
             <p className="mt-1 text-sm text-smoke">{new Date(emergency.timestamp).toLocaleTimeString()}</p>
           </div>
@@ -344,13 +345,21 @@ export function CaregiverConsole({ initialRoom }: { initialRoom: string }) {
               Alerts
             </h2>
             {alerts.length === 0 ? (
-              <p className="mt-2 text-sm text-smoke">Vocal blocks, strain warnings, emergencies and trigger alerts appear here the moment they happen.</p>
+              <p className="mt-2 text-sm text-smoke">Vocal blocks, strain warnings, emergencies, trigger alerts and messages from the speaker&apos;s phone appear here the moment they happen.</p>
             ) : (
               <ul ref={alertsRef} className="mt-3 flex max-h-80 flex-col gap-2 overflow-y-auto pr-1" aria-live="assertive">
                 {alerts.map((alert) => (
                   <li key={alert.id} className={`rounded-xl border px-3 py-2 ${alert.kind === 'emergency' ? 'border-crimson/70 bg-crimson/10' : 'border-white/10 bg-black/30'}`}>
                     <div className="flex items-baseline justify-between gap-3">
-                      <span className="font-semibold text-bone">{ALERT_LABEL[alert.kind]}</span>
+                      <span className="flex items-center gap-2 font-semibold text-bone">
+                        {ALERT_LABEL[alert.kind]}
+                        {alert.origin === 'phone' && (
+                          <span className="badge px-2 py-0.5 normal-case tracking-normal">
+                            <Smartphone aria-hidden className="size-3" />
+                            phone
+                          </span>
+                        )}
+                      </span>
                       <span className="shrink-0 text-xs tabular-nums text-smoke">{new Date(alert.timestamp).toLocaleTimeString()}</span>
                     </div>
                     <p className="text-sm text-smoke">
@@ -376,7 +385,7 @@ export function CaregiverConsole({ initialRoom }: { initialRoom: string }) {
                   <li key={transcript.id} className="rounded-xl border border-white/10 bg-black/30 px-3 py-2">
                     <p className="font-display text-lg text-bone">{transcript.grammar.formattedText}</p>
                     <p className="mt-0.5 text-xs text-smoke">
-                      {new Date(transcript.timestamp).toLocaleTimeString()} · {transcript.source === 'demo' ? 'demo script' : transcript.source === 'system-dictation' ? 'dictated' : 'typed'}
+                      {new Date(transcript.timestamp).toLocaleTimeString()} · {transcript.source === 'demo' ? 'demo script' : transcript.source === 'system-dictation' ? 'dictated' : transcript.source === 'on-device' ? 'spoken' : 'typed'}
                     </p>
                   </li>
                 ))}

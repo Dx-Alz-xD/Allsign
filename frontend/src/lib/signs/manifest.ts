@@ -1,5 +1,5 @@
 /**
- * Static sign photos for the Pitch Mode overlay, described by
+ * Static sign photos for the Studio overlay, described by
  * public/signs/manifest.json (see public/signs/README.md).
  *
  * A reconstructed sentence becomes a sequence of sign tokens. Words with a

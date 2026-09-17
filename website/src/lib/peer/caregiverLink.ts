@@ -12,6 +12,9 @@
  * The signalling socket reconnects on its own, even while the data channel is
  * up, and identifies the device with `clientId` so the relay lets it take its
  * role back from a connection it has not yet noticed is gone.
+ *
+ * Alerts raised on the speaker's phone arrive over the signalling socket instead
+ * (the relay passes them on) and reach `onMessage` like any other alert.
  */
 
 import type { CaregiverMessage, CaregiverRole, SignalMessage } from '@shared/types';
@@ -212,6 +215,14 @@ export class CaregiverLink {
         if (!connection || this.options.role !== 'speaker') return;
         await connection.setRemoteDescription({ type: 'answer', sdp: message.sdp });
         await this.flushIce();
+        break;
+      }
+      case 'alert': {
+        const parsed = parseCaregiverMessage(message);
+        if (!parsed) break;
+        this.options.onMessage(parsed);
+        // The relay keeps a phone alert until a caregiver confirms it, so a dropped connection cannot lose it.
+        if (this.options.role === 'caregiver') this.sendSignal({ type: 'alert-ack', id: message.alert.id });
         break;
       }
       case 'ice': {

@@ -209,7 +209,7 @@ const SIMULATED_GRAMMAR: readonly GrammarResponse[] = [
 
 const GRAMMAR_ROTATION_SECONDS = 8;
 
-/** Raw token sequences Pitch Mode replays through speech.worker and the real grammar engine. */
+/** Raw token sequences Studio replays through speech.worker and the real grammar engine. */
 export const DEMO_TOKEN_SCRIPT: readonly (readonly string[])[] = SIMULATED_GRAMMAR.map((grammar) => grammar.originalTokens);
 
 export function simulatedGrammarAt(elapsedSeconds: number): GrammarResponse {

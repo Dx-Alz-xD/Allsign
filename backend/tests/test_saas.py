@@ -220,10 +220,10 @@ def accounts_required(monkeypatch):
     monkeypatch.setattr(get_settings(), "REQUIRE_ACCOUNT", True)
 
 
-def signal_close_code(client: "TestClient", role: str, token: str | None = None) -> int | None:
+def signal_close_code(client: "TestClient", role: str, token: str | None = None, room: str = "ROOM-1") -> int | None:
     """The close code the relay answers a join with, or None when the join was accepted."""
     protocols = [SIGNAL_PROTOCOL] + ([f"voicematics.token.{token}"] if token else [])
-    with client.websocket_connect(f"/ws/signal/ROOM-1?role={role}&client=device-0001", subprotocols=protocols) as socket:
+    with client.websocket_connect(f"/ws/signal/{room}?role={role}&client=device-0001", subprotocols=protocols) as socket:
         try:
             message = socket.receive_json()
         except WebSocketDisconnect as closed:
@@ -320,6 +320,21 @@ def test_caregiver_relay_needs_pro_for_the_speaker(client: "TestClient"):
     # The caregiver can watch without an account, but a token that is sent must be valid.
     assert signal_close_code(client, "caregiver") is None
     assert signal_close_code(client, "caregiver", "not-a-token") == 4401
+    # The speaker's phone signs in like the speaker.
+    assert signal_close_code(client, "alerter") == 4401
+    assert signal_close_code(client, "alerter", bearer(free)) == 4402
+    assert signal_close_code(client, "alerter", bearer(pro)) is None
+
+
+@pytest.mark.usefixtures("accounts_required")
+def test_a_phone_only_raises_alerts_in_its_own_speakers_room(client: "TestClient"):
+    _, _, pro = make_user("pro@example.com", "pro")
+    _, _, other = make_user("other@example.com", "pro")
+    speaker_protocols = [SIGNAL_PROTOCOL, f"voicematics.token.{bearer(pro)}"]
+    with client.websocket_connect("/ws/signal/ROOM-2?role=speaker", subprotocols=speaker_protocols) as speaker:
+        speaker.receive_json()
+        assert signal_close_code(client, "alerter", bearer(other), room="ROOM-2") == 4403
+        assert signal_close_code(client, "alerter", bearer(pro), room="ROOM-2") is None
 
 
 def test_local_mode_keeps_every_feature(client: "TestClient"):

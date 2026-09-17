@@ -33,6 +33,14 @@ describe('parseCaregiverMessage', () => {
     expect(parseCaregiverMessage({ type: 'transcript', transcript })).toEqual({ type: 'transcript', transcript });
   });
 
+  it('accepts a phone alert as the relay stamps it, and only a known origin', () => {
+    const relayed = { id: 'phone-1a2b', kind: 'message', message: 'Please come here', timestamp: 5, origin: 'phone' };
+    expect(parseCaregiverMessage({ type: 'alert', alert: relayed })).toEqual({ type: 'alert', alert: relayed });
+    const parsed = parseCaregiverMessage({ type: 'alert', alert: { ...relayed, origin: 'satellite' } });
+    expect(parsed).toEqual({ type: 'alert', alert: { id: 'phone-1a2b', kind: 'message', message: 'Please come here', timestamp: 5 } });
+    expect(parseCaregiverMessage({ type: 'alert', alert: { ...relayed, kind: 'shout' } })).toBeNull();
+  });
+
   it('drops extra fields instead of passing them through', () => {
     const parsed = parseCaregiverMessage({ type: 'alert', alert: { id: 'a', kind: 'emergency', message: 'Help', timestamp: 1, html: '<b>' } });
     expect(parsed).toEqual({ type: 'alert', alert: { id: 'a', kind: 'emergency', message: 'Help', timestamp: 1 } });

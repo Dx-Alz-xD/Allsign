@@ -18,7 +18,7 @@ const ACTIONS: ReadonlyArray<[Action, string, string]> = [
   ['DIRECT_PASTE', 'Type the phrase', 'into whichever app has focus'],
   ['TTS_SPOKEN', 'Speak the phrase', 'through the speakers'],
   ['WEBRTC_ALERT', 'Alert the caregiver', 'over the caregiver link'],
-  ['OS_HOTKEY', 'Press a shortcut', 'the phrase is the key combination, e.g. Control+Shift+M'],
+  ['OS_HOTKEY', 'Press a shortcut', 'record the keys by pressing them, like setting a key binding in a game'],
 ];
 
 const CAPTURE_MS = 600;

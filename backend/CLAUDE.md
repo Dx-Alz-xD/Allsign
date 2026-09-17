@@ -4,7 +4,7 @@
 - **Product:** Voicematics — All-in-One Assistive Speech & Acoustic Platform, sold as a service: desktop app (`/frontend`), website (`/website`), backend (`/backend`). "OmniVoice OS" was the desktop app's codename and only survives in internal identifiers (`app://omnivoice`, `window.omnivoice`, `omnivoice.db`, `omnivoice:` storage keys); never show it to users.
 - **Performance Target:** Sub-15ms deterministic processing latency.
 - **Strict Compliance Guardrails:** 
-  - ZERO Generative AI, Predictive AI, or Computer Vision model calls in the speech path (section 7 lists the agents beside it).
+  - ZERO Generative AI, Predictive AI, or Computer Vision model calls in the speech path, apart from the on-device Whisper recognizer that turns audio into verbatim words (section 7 covers it and the one agent beside the path).
   - 100% Web Audio API / Worklets (DSP), Linear Predictive Coding (LPC), Fast-Fourier Transforms (FFT), and rule-based NLTK Context-Free Grammar (CFG) AST parsing.
   - Native OS Automation via `@nut-tree-fork/nut-js`.
 - **Multi-Laptop Topology:**
@@ -85,8 +85,8 @@ venv/Scripts/python.exe scripts/evaluate_benchmarks.py  # regenerate EVALUATION_
 | `GET/POST /api/presets`, `GET/PUT/DELETE /api/presets/{id}` | `ProfilePresetInput` -> `ProfilePreset` (account; saving needs the profile's feature) | FluencyPanel |
 | `GET/POST /api/sessions`, `GET /api/sessions/summary`, `GET/DELETE /api/sessions/{id}` | `SessionAnalyticsInput` -> `SessionAnalytics`, `SessionSummary` (Pro: `analytics`) | AnalyticsView, SessionProvider |
 | `GET/POST /api/phonemes/targets`, `DELETE /api/phonemes/targets/{id}` | `PhonemeTargetInput` -> `PhonemeTarget` (Pro: `therapy`) | TherapyPanel |
-| `GET /api/phonemes/lookup?prefix=W+AO&limit=10` | -> `PhonemeLookupResponse` | AphasiaPanel |
-| `WS /ws/signal/{room}?role=speaker\|caregiver&client=<id>` | `SignalMessage`; token as subprotocol `voicematics.token.<token>` (close 4401 = speaker not signed in, 4402 = plan without `caregiver_link`, 4409 = role taken, 4410 = replaced by the same device) | caregiverLink.ts |
+| `GET /api/phonemes/lookup?prefix=W+AO&limit=10` | -> `PhonemeLookupResponse` | no UI since Aphasia Mode was folded into ClearVoice |
+| `WS /ws/signal/{room}?role=speaker\|caregiver\|alerter&client=<id>` | `SignalMessage`, `PhoneAlertRequest`; token as subprotocol `voicematics.token.<token>` (close 4401 = speaker/phone not signed in, 4402 = plan without `caregiver_link`, 4403 = phone not on the speaker's account, 4409 = role taken, 4410 = replaced by the same device) | caregiverLink.ts (desktop + website console), website `lib/peer/phoneAlert.ts` (`/alert`) |
 | `POST /api/auth/signup`, `POST /api/auth/login` | `AuthCredentials` -> `AuthSessionResponse` | website, desktop SignInScreen |
 | `GET /api/auth/me` (Bearer token) | -> `AccountResponse` (with `entitlements`) | website, desktop AccountProvider |
 | `POST /api/auth/me/delete` (Bearer token) | `AccountDeleteRequest` -> 204 (403 = wrong password) | desktop AccountView |
@@ -95,11 +95,8 @@ venv/Scripts/python.exe scripts/evaluate_benchmarks.py  # regenerate EVALUATION_
 | `POST /api/license/deactivate` (Bearer token) | -> `LicenseDeactivateResponse` | desktop AccountView |
 | `GET /api/billing/plans` | -> `PricingPlan[]` | website pricing matrix |
 | `POST /api/billing/checkout`, `GET /api/billing/subscription` (Bearer token) | `CheckoutRequest` -> `CheckoutResponse`, `Subscription` | website mock checkout, dashboard overlay |
-| `GET /api/agent/status` | -> `AgentStatus` | website assistant widget |
-| `POST /api/agent/chat` | `ChatRequest` -> `ChatResponse` | website `AgentAssistant.tsx` |
-| `POST /api/agent/generate-report` | `SessionLog` -> `ClinicalReport` (Pro: `clinical_reports`) | desktop AnalyticsView |
-| `POST /api/agent/compile-grammar` | `CompileGrammarRequest` -> `CompiledGrammar` (account; only local mode saves) | grammar authoring (no UI yet) |
-| `POST /api/agent/refine-sentence` | `SentenceRefineRequest` -> `RefinedSentence` (account; `clearvoice` / `aphasia`) | ClearVoice and Aphasia second answer (SessionProvider) |
+| `GET /api/agent/status` | -> `AgentStatus` | diagnostics |
+| `POST /api/agent/refine-sentence` | `SentenceRefineRequest` -> `RefinedSentence` (account; `clearvoice`, `aphasia` accepted as clearvoice) | ClearVoice second answer (SessionProvider) |
 
 - Change a contract in both files in the same commit; the desktop client is `frontend/src/lib/api/client.ts`, the website client is `website/src/lib/api.ts`.
 - `frontend/src/workers/trigger.worker.ts` ports `acoustic_matcher.py`; `tests/test_acoustic_matcher.py` and `src/workers/__tests__/dsp.test.ts` pin the same reference values.
@@ -107,17 +104,18 @@ venv/Scripts/python.exe scripts/evaluate_benchmarks.py  # regenerate EVALUATION_
 ---
 
 ## 7. Language-Model Agents (`/backend/agents`) and the Voicematics Website (`/website`)
-The no-model rule in section 1 is about the speech path: capture, DSP workers, worklets, the grammar engine, trigger matching and everything the desktop app does while someone speaks. Four agents run **beside** that path, never in it:
-- `agents/assistant.py`: the website's onboarding chat (`AgentAssistant.tsx`). Two deterministic tools, `simulate_dsp_delay` and `recommend_settings`; the model never hears audio.
-- `agents/cfg_compiler.py`: plain-text correction request -> NLTK CFG rules, validated with `nltk.CFG.fromstring()` and against `grammar_engine.GRAMMAR_RULES` before they are appended to `grammars/user_custom.cfg` (+ `.transforms.json`). Loading those rules into the engine is a separate, deterministic step that does not exist yet.
-- `agents/telemetry_reporter.py`: session log -> `ClinicalReport`. Every number is computed in Python; the model writes only `slp_summary_paragraph`.
-- `agents/sentence_refiner.py`: ClearVoice / Aphasia Mode words + the grammar engine's sentence + up to 6 earlier sentences -> a context-aware rebuild. SessionProvider asks for it after the grammar engine's sentence is on screen and shows it underneath as the higher-confidence answer; it never delays the grammar engine's sentence, direct paste types only the grammar engine's sentence, and a "Type this answer" button types Gemini's. Switched by `settings.speech.geminiAnswer` (default on); its own rate limit (`REFINE_RATE_LIMIT_PER_MINUTE`) and a lighter Gemini model before Groq (`GEMINI_REFINE_FALLBACK_MODEL`).
+The no-model rule in section 1 is about the speech path: capture, DSP workers, worklets, the grammar engine, trigger matching and everything the desktop app does while someone speaks. Two exceptions, both deliberate:
+- On-device recognition (`frontend/src/workers/asr.worker.ts`, Whisper through Transformers.js/ONNX Runtime): decodes greedily with no repetition penalty and a disfluent prompt so stutters, repeats and fillers come through verbatim. The raw text is kept (`RawTranscript`) and is what direct paste types by default. Audio never leaves the machine.
+- One agent, and only one, runs **beside** the path: `agents/sentence_refiner.py`. Words + the grammar engine's sentence + up to 6 earlier sentences -> a cleaned-up sentence shown under the grammar engine's. An output validator rejects any content word that was not said (`foreign_words`), retries once, then falls back to the grammar engine's sentence. Switched by `settings.speech.geminiAnswer` (default on); its own rate limit (`REFINE_RATE_LIMIT_PER_MINUTE`) and a lighter Gemini model before Groq (`GEMINI_REFINE_FALLBACK_MODEL`).
+- Direct paste (`settings.speech.pasteWhat`): `heard` (default, the raw recognizer text the moment it is recognised), `quick` (the grammar engine's sentence) or `gemini` (the refiner's answer, in spoken order; the grammar engine's sentence when it fails). Switching direct paste on starts listening.
+- The website's help guide is a predefined question / option / answer tree (`website/src/lib/help/guide.ts`); no model is involved. Do not add another agent.
+- Phone alerts (`/alert` on the website, `role=alerter` on the relay) are the one caregiver payload that passes through the server: the relay stamps them, keeps them until a caregiver acknowledges them (`alert-ack`, 10 minutes at most) and forwards them to the caregiver and the speaker.
 
 Rules:
-- Provider order is Gemini, then Groq on any Gemini failure (`agents/llm.py`, pydantic-ai `FallbackModel`). Keys: `GEMINI_API_KEY`, `GROQ_API_KEY` in `backend/.env`; with neither set the `/api/agent` endpoints answer 503 and the website widget shows "Offline".
+- Provider order is Gemini, then Groq on any Gemini failure (`agents/llm.py`, pydantic-ai `FallbackModel`). Keys: `GEMINI_API_KEY`, `GROQ_API_KEY` in `backend/.env`; with neither set `/api/agent/refine-sentence` answers 503 and the desktop app shows the grammar engine's sentence only.
 - Never import `agents/` from `grammar_engine.py`, `acoustic_matcher.py`, the routers the desktop app calls in real time, or anything under `frontend/src/workers`.
 - Tests script the model with `pydantic_ai.models.function.FunctionModel` and set `models.ALLOW_MODEL_REQUESTS = False`; no test may call a provider.
-- The website (`website/`, Next.js 14 on port 3100, Tailwind + anime.js) talks only to this backend: accounts, licences, the mock checkout (`routers/billing.py`, test card 4242 4242 4242 4242, brand + last four stored) and the agents. It is not part of the Electron build.
+- The website (`website/`, Next.js 14 on port 3100, Tailwind + anime.js) talks only to this backend: accounts, licences, the mock checkout (`routers/billing.py`, test card 4242 4242 4242 4242, brand + last four stored), the caregiver console (`/caregiver`) and the phone alert button (`/alert`). It is not part of the Electron build.
 
 ```bash
 cd website

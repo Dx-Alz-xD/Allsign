@@ -5,7 +5,6 @@ import { ClipboardPaste, Gauge, Radio, type LucideIcon } from 'lucide-react';
 import type { ProfileMode, SystemState } from '@shared/types';
 import { LockedFeature } from '@/components/account/PlanGate';
 import { PitchModeDashboard } from '@/components/PitchModeDashboard';
-import { AphasiaPanel } from '@/components/profiles/AphasiaPanel';
 import { ClearVoicePanel } from '@/components/profiles/ClearVoicePanel';
 import { FluencyPanel } from '@/components/profiles/FluencyPanel';
 import { SensoryPanel } from '@/components/profiles/SensoryPanel';
@@ -111,7 +110,6 @@ export function HomeView({ state }: HomeViewProps) {
         {unlocked && state.activeProfile === 'fluency' && <FluencyPanel />}
         {unlocked && state.activeProfile === 'vocal_assist' && <VocalAssistPanel />}
         {unlocked && state.activeProfile === 'therapy' && <TherapyPanel />}
-        {unlocked && state.activeProfile === 'aphasia' && <AphasiaPanel />}
         {unlocked && state.activeProfile === 'sensory' && <SensoryPanel />}
       </Reveal>
 

@@ -25,7 +25,7 @@ const MAX_TREE_CHARS = 20_000;
 const MAX_TOKENS = 256;
 const MAX_TOKEN_CHARS = 64;
 
-const ALERT_KINDS: ReadonlySet<CaregiverAlert['kind']> = new Set(['vocal-block', 'fatigue', 'emergency', 'trigger']);
+const ALERT_KINDS: ReadonlySet<CaregiverAlert['kind']> = new Set(['vocal-block', 'fatigue', 'emergency', 'trigger', 'message']);
 const SPEECH_SOURCES: ReadonlySet<SpeechSource> = new Set(['manual', 'system-dictation', 'on-device', 'demo']);
 
 type Record_ = Record<string, unknown>;
@@ -68,16 +68,17 @@ function parseFluency(value: unknown): FluencyMetrics | null {
 
 function parseAlert(value: unknown): CaregiverAlert | null {
   if (!isRecord(value)) return null;
-  const { id, kind, message, timestamp, durationMs } = value;
+  const { id, kind, message, timestamp, durationMs, origin } = value;
   if (!boundedString(id, MAX_ID_CHARS) || !boundedString(message, MAX_ALERT_CHARS) || !finite(timestamp)) return null;
   if (typeof kind !== 'string' || !ALERT_KINDS.has(kind as CaregiverAlert['kind'])) return null;
-  if (durationMs !== undefined && !finite(durationMs)) return null;
+  if (durationMs !== undefined && durationMs !== null && !finite(durationMs)) return null;
   return {
     id,
     kind: kind as CaregiverAlert['kind'],
     message,
     timestamp,
-    ...(durationMs !== undefined ? { durationMs: durationMs as number } : {}),
+    ...(finite(durationMs) ? { durationMs } : {}),
+    ...(origin === 'phone' ? { origin: 'phone' as const } : {}),
   };
 }
 

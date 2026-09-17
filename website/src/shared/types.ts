@@ -184,14 +184,15 @@ export type CaregiverRole = 'speaker' | 'caregiver';
 
 export interface CaregiverAlert {
   id: string;
-  kind: 'vocal-block' | 'fatigue' | 'emergency' | 'trigger';
+  kind: 'vocal-block' | 'fatigue' | 'emergency' | 'trigger' | 'message'; // message: a quick note sent from the speaker's phone
   message: string;
   timestamp: number; // epoch ms
   durationMs?: number;
+  origin?: 'phone'; // raised on the speaker's phone and relayed by the server, not sent by the desktop app
 }
 
-// Where a reconstructed sentence came from: typed text, opt-in system dictation, or the Pitch Mode demo script.
-export type SpeechSource = 'manual' | 'system-dictation' | 'demo';
+// Where a reconstructed sentence came from: typed text, opt-in system dictation, or the Studio demo script.
+export type SpeechSource = 'manual' | 'system-dictation' | 'on-device' | 'demo'; // on-device: the app's own Whisper, verbatim
 
 // A reconstructed sentence shared with the caregiver as soon as the grammar engine returns it.
 export interface CaregiverTranscript {
@@ -207,13 +208,31 @@ export type CaregiverMessage =
   | { type: 'alert'; alert: CaregiverAlert }
   | { type: 'transcript'; transcript: CaregiverTranscript };
 
-// Signalling relay (WebSocket /ws/signal/{room}?role=speaker|caregiver&client=<id>). The relay forwards offer,
-// answer and ice to the other role and sends the rest itself. The session token goes in the subprotocols, never the
-// URL: offer ['voicematics.signal', 'voicematics.token.<token>']. Close codes: 4401 the speaker has no valid session,
-// 4402 the speaker's plan has no caregiver_link, 4409 the role is taken by another device, 4410 this device
-// reconnected and the newer connection replaced this one.
+// Signalling relay (WebSocket /ws/signal/{room}?role=speaker|caregiver|alerter&client=<id>). The relay forwards offer,
+// answer and ice between speaker and caregiver and sends the rest itself. The session token goes in the subprotocols,
+// never the URL: offer ['voicematics.signal', 'voicematics.token.<token>']. Close codes: 4401 the speaker or phone has
+// no valid session, 4402 its plan has no caregiver_link, 4403 the phone's account is not the speaker's, 4409 the role
+// is taken by another device, 4410 this device reconnected and the newer connection replaced this one.
+//
+// `alerter` is the speaker's phone: it sends PhoneAlertRequest and nothing else. The relay delivers the alert to the
+// caregiver and the speaker as { type: 'alert' } and keeps it (up to 10 minutes) until a caregiver answers
+// { type: 'alert-ack', id }, resending it to every caregiver that joins meanwhile. The phone hears { type: 'alert-sent' }
+// (delivered: a caregiver was in the room) and { type: 'alert-received' } once one acknowledged it. For the phone,
+// peerPresent / peer-joined / peer-left are about the caregiver.
+export type SignalRole = CaregiverRole | 'alerter';
+
+export interface PhoneAlertRequest {
+  type: 'alert';
+  kind: 'emergency' | 'message';
+  message: string; // 1 - 200 characters
+}
+
 export type SignalMessage =
-  | { type: 'joined'; room: string; role: CaregiverRole; peerPresent: boolean }
+  | { type: 'joined'; room: string; role: SignalRole; peerPresent: boolean }
+  | { type: 'alert'; alert: CaregiverAlert }
+  | { type: 'alert-sent'; id: string; delivered: boolean }
+  | { type: 'alert-ack'; id: string }
+  | { type: 'alert-received'; id: string }
   | { type: 'peer-joined'; role: CaregiverRole }
   | { type: 'peer-left'; role: CaregiverRole }
   | { type: 'offer'; sdp: string }
@@ -257,8 +276,7 @@ export type Feature =
   | 'therapy' // vowel plane and articulation targets
   | 'unlimited_triggers'
   | 'caregiver_link'
-  | 'analytics' // session history and summaries
-  | 'clinical_reports'; // the report agent
+  | 'analytics'; // session history and summaries
 
 export interface Entitlements {
   tier: PlanTier; // the tier the account is really on, after a lapsed subscription is settled
@@ -396,8 +414,8 @@ export interface CheckoutResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Language-model agents (backend/agents/, routers/agents.py). They run beside the speech path, never in it:
-// the website chat, an authoring-time grammar compiler and a post-session report writer.
+// The one language-model agent (backend/agents/sentence_refiner.py, routers/agents.py). It runs beside the speech
+// path, never in it: ClearVoice's second answer, checked so it only uses words that were said.
 
 export type AgentProvider = 'gemini' | 'groq';
 
@@ -408,92 +426,9 @@ export interface AgentStatus {
   primary: AgentProvider | null;
 }
 
-export interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string; // 1 - 4000 characters
-}
-
-// POST /api/agent/chat; the last message must be from the user
-export interface ChatRequest {
-  messages: ChatMessage[]; // 1 - 40
-}
-
-export interface ToolCallRecord {
-  name: 'simulate_dsp_delay' | 'recommend_settings' | string;
-  args: Record<string, unknown>;
-  result: unknown; // DspDelayEstimate | SettingsRecommendation
-}
-
-export interface ChatResponse {
-  reply: string;
-  toolCalls: ToolCallRecord[];
-  modelName: string;
-}
-
-// simulate_dsp_delay(sample_rate): the desktop app's capture -> analysis latency arithmetic
-export interface DspDelayEstimate {
-  sampleRate: number;
-  captureQuantumMs: number;
-  antiAliasTaps: number;
-  antiAliasGroupDelayMs: number;
-  resampleRatio: number;
-  analysisHopMs: number;
-  processingMsPerHop: number;
-  endToEndMs: number;
-  averageMs: number;
-  worstCaseMs: number;
-  budgetMs: number;
-  withinBudget: boolean;
-}
-
-export type DisfluencyType = 'stuttering' | 'dysarthria' | 'aphasia';
-
-// recommend_settings(disfluency_type)
-export interface SettingsRecommendation {
-  disfluencyType: DisfluencyType;
-  dafDelayMs: number;
-  pitchShiftSemitones: number;
-  rationale: string;
-}
-
-// POST /api/agent/generate-report
-export interface StrainSample {
-  timestamp: number; // ms since the session started
-  jitterPercent: number;
-  shimmerDb: number;
-  hnrDb: number;
-  strainIndex: number; // 0 - 100
-  pitchHz?: number | null;
-}
-
-export interface FeedbackEvent {
-  timestamp: number; // ms since the session started
-  kind: 'daf' | 'fsf' | 'block'; // daf/fsf: feedback switched on or changed; block: a vocal block
-  value: number; // delay ms / octave shift / block duration ms
-}
-
-export interface SessionLog {
-  sessionId?: string | null;
-  startedAt?: string | null;
-  profileMode?: string | null;
-  samples: StrainSample[];
-  events: FeedbackEvent[];
-  dafDelayMs: number;
-  fsfOctaveShift: number;
-  speakingMs?: number | null;
-}
-
-// The numbers are computed by the backend from the log; the model writes only the paragraph.
-export interface ClinicalReport {
-  session_duration_minutes: number;
-  stuttering_reduction_index: number; // -1 .. 1
-  vocal_fatigue_alert: boolean;
-  slp_summary_paragraph: string;
-  recommended_daf_delay_ms: number;
-}
-
 // POST /api/agent/refine-sentence (signed in when the backend requires accounts). The second, context-aware answer
-// for ClearVoice and Aphasia Mode, asked for after the grammar engine's sentence is already on screen.
+// for ClearVoice, asked for after the grammar engine's sentence is already on screen. 'aphasia' is accepted from
+// older clients and treated as clearvoice.
 export type RefineProfile = 'clearvoice' | 'aphasia';
 
 export interface SentenceRefineRequest {
@@ -506,25 +441,4 @@ export interface SentenceRefineRequest {
 export interface RefinedSentence {
   text: string;
   modelName: string; // e.g. gemini-flash-latest; a lighter Gemini model or Groq when that one is busy
-}
-
-// POST /api/agent/compile-grammar (signed in when the backend requires accounts)
-export interface CompileGrammarRequest {
-  prompt: string; // 3 - 1000 characters
-  save?: boolean; // default true: append to backend/grammars/user_custom.cfg; only a local-mode backend saves
-}
-
-export interface CFGCompilerOutput {
-  grammar_rules: string[]; // NLTK productions, e.g. "WHQ_WHERE -> WH NP COP"
-  ast_transform_map: Record<string, string>; // non-terminal -> rebuilt word order
-  validation_status: boolean;
-}
-
-export interface CompiledGrammar {
-  request: string;
-  output: CFGCompilerOutput;
-  path: string;
-  validationRounds: number;
-  modelName: string;
-  saved: boolean;
 }

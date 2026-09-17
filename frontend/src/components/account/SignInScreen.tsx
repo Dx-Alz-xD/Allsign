@@ -217,7 +217,7 @@ export function SignInScreen() {
             <p className="mt-2 leading-relaxed text-mist">
               {mode === 'login'
                 ? 'Your triggers, presets and session history come with you to any computer you sign in on.'
-                : 'Start on the Free plan: ClearVoice, Aphasia Mode, the Sensory HUD and one acoustic trigger. Upgrade any time on the website.'}
+                : 'Start on the Free plan: ClearVoice, the Sensory HUD, Studio and one gesture. Upgrade any time on the website.'}
             </p>
 
             {notice && (

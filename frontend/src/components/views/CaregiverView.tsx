@@ -1,7 +1,7 @@
 'use client';
 
 import { useId, useState, type FormEvent } from 'react';
-import { Copy, Link2, Link2Off, Radio, Siren, TriangleAlert } from 'lucide-react';
+import { Copy, Link2, Link2Off, Radio, Siren, Smartphone, TriangleAlert } from 'lucide-react';
 import type { CaregiverRole } from '@shared/types';
 import { ProBadge, UpgradeActions } from '@/components/account/PlanGate';
 import { buttonStyles } from '@/components/modals/Modal';
@@ -24,7 +24,9 @@ const STATUS_TEXT = {
   closed: 'Disconnected',
 } as const;
 
-const ALERT_LABELS = { 'vocal-block': 'Vocal block', fatigue: 'Vocal strain', emergency: 'Emergency', trigger: 'Trigger' } as const;
+const ALERT_LABELS = { 'vocal-block': 'Vocal block', fatigue: 'Vocal strain', emergency: 'Emergency', trigger: 'Trigger', message: 'Message' } as const;
+/** An emergency stays pinned to the top this long. */
+const EMERGENCY_BANNER_MS = 5 * 60 * 1000;
 
 const EMERGENCY_NOTES = {
   sent: 'Emergency alert sent.',
@@ -56,6 +58,8 @@ export function CaregiverView() {
   const [emergencyNote, setEmergencyNote] = useState('');
   const ids = { room: useId(), role: useId() };
   const active = link !== null && link.status !== 'closed';
+  const phoneLink = websiteUrl(`alert?room=${encodeURIComponent(room)}`);
+  const emergency = alerts.find((alert) => alert.kind === 'emergency' && Date.now() - alert.timestamp < EMERGENCY_BANNER_MS);
 
   const connect = (event: FormEvent) => {
     event.preventDefault();
@@ -67,6 +71,16 @@ export function CaregiverView() {
 
   return (
     <div className="space-y-6">
+      {emergency && (
+        <div role="alert" className="flex items-start gap-3 rounded-2xl border-2 border-warn bg-warn/15 p-5">
+          <Siren aria-hidden className="mt-0.5 size-7 shrink-0 text-warn" />
+          <div className="min-w-0">
+            <p className="font-display text-xl font-bold text-ink">Emergency alert{emergency.origin === 'phone' ? ' from the speaker’s phone' : ''}</p>
+            <p className="mt-1 text-ink">{emergency.message}</p>
+            <p className="mt-1 text-sm text-mist">{new Date(emergency.timestamp).toLocaleTimeString()}</p>
+          </div>
+        </div>
+      )}
       <section aria-labelledby="pair-heading" className="glass rounded-2xl p-5">
         <h2 id="pair-heading" className="text-xl font-semibold text-ink">
           Pair devices
@@ -145,6 +159,15 @@ export function CaregiverView() {
               Copy link
             </button>
           </p>
+          <p className="glass flex flex-wrap items-center gap-2 rounded-2xl px-4 py-3 text-sm text-mist">
+            <Smartphone aria-hidden className="size-4 text-neon-cyan" />
+            <span>Alert button for your phone: open this link on your phone and sign in. Alerts reach your caregiver even when this app is closed.</span>
+            <code className="rounded bg-black/30 px-2 py-1 text-ink">{phoneLink}</code>
+            <button type="button" onClick={() => void navigator.clipboard?.writeText(phoneLink)} className={cn(buttonStyles.secondary, 'h-9 px-3 text-sm')}>
+              <Copy aria-hidden className="size-4" />
+              Copy link
+            </button>
+          </p>
           <TelemetryBar source={telemetry} peer={peer} />
           <div className="flex flex-wrap items-center gap-3">
             <button type="button" onClick={() => setEmergencyNote(EMERGENCY_NOTES[sendEmergency() ?? 'none'])} className={buttonStyles.danger}>
@@ -211,6 +234,12 @@ export function CaregiverView() {
                 <span className="min-w-0 flex-1 text-ink">
                   <span className="font-semibold">{ALERT_LABELS[alert.kind]}</span>: {alert.message}
                   {alert.durationMs !== undefined && <span className="text-mist"> ({(alert.durationMs / 1000).toFixed(1)} s)</span>}
+                  {alert.origin === 'phone' && (
+                    <span className="ml-2 inline-flex items-center gap-1 rounded-full bg-white/10 px-2 py-0.5 text-xs text-mist">
+                      <Smartphone aria-hidden className="size-3" />
+                      from phone
+                    </span>
+                  )}
                 </span>
                 <span className="shrink-0 text-sm tabular-nums text-mist">{new Date(alert.timestamp).toLocaleTimeString()}</span>
               </li>

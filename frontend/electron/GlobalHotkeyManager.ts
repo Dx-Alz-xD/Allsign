@@ -9,7 +9,7 @@ export interface HotkeyBinding {
 }
 
 export const DEFAULT_HOTKEYS: readonly HotkeyBinding[] = [
-  { action: 'toggle-pitch-mode', label: 'Pitch Mode', accelerator: 'CommandOrControl+Shift+P' },
+  { action: 'toggle-pitch-mode', label: 'Studio', accelerator: 'CommandOrControl+Shift+P' },
   { action: 'toggle-mute', label: 'Mute or unmute', accelerator: 'CommandOrControl+Shift+M' },
   { action: 'emergency-alert', label: 'Emergency AAC alert', accelerator: 'CommandOrControl+Shift+A' },
 ];

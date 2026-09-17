@@ -153,8 +153,8 @@ const NODES: HelpNode[] = [
     id: 'cv-paste',
     title: 'Direct paste: typing into other apps',
     answer: [
-      'Turn on Direct paste in ClearVoice, click into the field you want to type in (a chat, a document, a browser) and speak. Each finished sentence is typed there, even while Voicematics is minimised.',
-      'It types the grammar engine’s sentence, the fast rule-based one; the Gemini answer is only typed when you press "Type this answer".',
+      'Turn on Direct paste in ClearVoice (it starts listening by itself), click into the field you want to type in (a chat, a document, a browser) and speak. What you say is typed there, even while Voicematics is minimised.',
+      'Choose what gets typed under "What gets typed": Exactly what I said (the default: word for word, stutters and fillers included, the moment it is recognised), Quick answer (the grammar engine’s tidied sentence) or Gemini answer (a few seconds later; the quick answer if Gemini is off or fails).',
       'Turn it off before saying something you do not want typed. Windows only.',
     ],
     keywords: ['direct paste', 'type', 'minimised', 'focus', 'nut'],
@@ -274,9 +274,9 @@ const NODES: HelpNode[] = [
     id: 'cg-phone',
     title: 'Sending an alert from my phone',
     answer: [
-      'The desktop app’s Caregiver view shows a second link, for your own phone. Open it there once and add it to the home screen.',
-      'It shows two large buttons, Emergency and Need help, and a short message. Tapping one sends the alert straight to the connected caregiver’s dashboard, with sound, whether or not you are at the computer.',
-      'The phone page works while the desktop app’s link is running and a caregiver is connected; it tells you when nobody is there yet.',
+      'In the desktop app, open Caregiver Link and connect as the speaker. It shows an "Alert button for your phone" link: open it on your phone, sign in with the same Voicematics account, and add the page to your home screen.',
+      'The page has a large Emergency button, quick messages (Please come here, I need help, I am okay, ...) and a box for your own message. One tap reaches the caregiver’s dashboard, with sound and a notification, whether or not the desktop app is open.',
+      'If no caregiver has the dashboard open, the page says so and the alert waits on the server for up to 10 minutes; it is delivered the moment they open it. Each alert shows whether it was delivered.',
     ],
     keywords: ['phone', 'emergency', 'help', 'alert', 'button'],
     options: [{ label: 'What does a caregiver see?', to: 'cg-what' }],
@@ -450,7 +450,7 @@ const NODES: HelpNode[] = [
     title: 'Is my audio uploaded?',
     answer: [
       'No. Recording, speech recognition, the feedback and HUD processing and gesture matching all run on your computer. Audio never leaves it.',
-      'The caregiver link carries readings and text, not sound, and goes from your computer to the caregiver’s device directly.',
+      'The caregiver link carries readings and text, not sound, and goes from your computer to the caregiver’s device directly. Alerts from your phone are the exception: they pass through the Voicematics server on their way, and are not kept once delivered.',
     ],
     keywords: ['audio', 'upload', 'cloud', 'record', 'privacy'],
   },

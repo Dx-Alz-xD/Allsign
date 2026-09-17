@@ -202,11 +202,47 @@ class SignalIce(BaseModel):
 
 PeerSignal = Annotated[Union[SignalOffer, SignalAnswer, SignalIce], Field(discriminator="type")]
 
+# The speaker's phone joins a room as `alerter`. It takes no part in the WebRTC exchange: it only sends alerts, which
+# the relay stamps and hands to the caregiver (and to the speaker's app), holding them for a caregiver not there yet.
+SignalRole = Literal["speaker", "caregiver", "alerter"]
+AlertKind = Literal["vocal-block", "fatigue", "emergency", "trigger", "message"]
+MAX_PHONE_ALERT_CHARS = 200
+
+class CaregiverAlertSchema(BaseModel):
+    id: str
+    kind: AlertKind
+    message: str
+    timestamp: int  # epoch ms
+    origin: Optional[Literal["phone"]] = None
+
+class PhoneAlertRequest(BaseModel):
+    type: Literal["alert"]
+    kind: Literal["emergency", "message"]
+    message: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MAX_PHONE_ALERT_CHARS)]
+
+class SignalAlert(BaseModel):
+    type: Literal["alert"] = "alert"
+    alert: CaregiverAlertSchema
+
+class SignalAlertSent(BaseModel):
+    type: Literal["alert-sent"] = "alert-sent"
+    id: str
+    delivered: bool  # sent to a caregiver in the room; either way the relay keeps it until a caregiver acknowledges it
+
+class SignalAlertAck(BaseModel):
+    """The caregiver's dashboard confirming it has shown a relayed alert."""
+    type: Literal["alert-ack"]
+    id: Annotated[str, StringConstraints(max_length=64)]
+
+class SignalAlertReceived(BaseModel):
+    type: Literal["alert-received"] = "alert-received"
+    id: str
+
 class SignalJoined(BaseModel):
     type: Literal["joined"] = "joined"
     room: str
-    role: CaregiverRole
-    peerPresent: bool
+    role: SignalRole
+    peerPresent: bool  # for the phone: whether a caregiver is in the room
 
 class SignalPeerJoined(BaseModel):
     type: Literal["peer-joined"] = "peer-joined"

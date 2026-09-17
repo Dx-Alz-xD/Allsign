@@ -6,8 +6,17 @@ import { buttonStyles } from '@/components/modals/Modal';
 import { Switch, inputStyles } from '@/components/modals/settings/controls';
 import { ListenControls, RawTranscript } from '@/components/profiles/ListenControls';
 import { useSession } from '@/components/providers/SessionProvider';
+import { useSettings } from '@/components/providers/SettingsProvider';
 import { SyntaxTree, TextReconstruction } from '@/components/ui/Reconstruction';
+import type { PasteWhat } from '@/lib/settings/schema';
 import { tokenize } from '@/lib/speech/tokenSource';
+import { cn } from '@/lib/cn';
+
+const PASTE_CHOICES: ReadonlyArray<{ value: PasteWhat; label: string; detail: string }> = [
+  { value: 'heard', label: 'Exactly what I said', detail: 'Word for word, stutters, repeats and fillers included, typed the moment it is recognised.' },
+  { value: 'quick', label: 'Quick answer', detail: 'The grammar rules’ tidied sentence, a few milliseconds after the words.' },
+  { value: 'gemini', label: 'Gemini answer', detail: 'Gemini’s cleaned-up sentence, a few seconds later; the quick answer if Gemini is off or fails.' },
+];
 
 /**
  * Speech tokens in, grammatical sentence out, typed into the active app.
@@ -84,27 +93,62 @@ export function TokenInput({ compact = false }: { compact?: boolean }) {
 }
 
 export function DirectPasteControls() {
-  const { directPasteActive, setDirectPasteActive, grammar, typeText, lastPasteDetail } = useSession();
+  const { directPasteActive, setDirectPasteActive, grammar, refinement, rawTranscript, listening, typeText, lastPasteDetail } = useSession();
+  const { settings, updateSpeech } = useSettings();
   const inDesktop = typeof window !== 'undefined' && Boolean(window.omnivoice);
   const describedBy = useId();
+  const choiceId = useId();
+  const pasteWhat = settings.speech.pasteWhat;
+  const choice = PASTE_CHOICES.find((item) => item.value === pasteWhat) ?? PASTE_CHOICES[0];
+
+  const last =
+    pasteWhat === 'heard'
+      ? (rawTranscript[0]?.text ?? null)
+      : pasteWhat === 'gemini' && refinement?.status === 'ready'
+        ? refinement.text
+        : (grammar?.formattedText ?? null);
 
   return (
     <div className="flex flex-col gap-3">
       <Switch checked={directPasteActive} onChange={setDirectPasteActive} label="Direct paste" describedBy={describedBy} />
       <p id={describedBy} className="text-sm text-mist">
         {inDesktop
-          ? 'When on, every sentence rebuilt from your voice (or the text box) is typed into whichever app has keyboard focus, even while Voicematics is minimised. Turn on listening, switch to the other app, and speak.'
-          : 'Direct paste needs the desktop app; in a browser the sentence stays here.'}
+          ? 'When on, Voicematics listens and types what you say into whichever app has keyboard focus, even while it is minimised. Click into the text field, then speak.'
+          : 'Direct paste needs the desktop app; in a browser the text stays here.'}
       </p>
+      {directPasteActive && !listening && (
+        <p className="flex items-start gap-2 text-sm text-warn">
+          <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
+          Listening is off, so only the text box is typed. Turn on listening to type from your voice.
+        </p>
+      )}
+      <div className="flex flex-col gap-1.5">
+        <p id={choiceId} className="text-sm font-bold text-mist">
+          What gets typed
+        </p>
+        <div role="radiogroup" aria-labelledby={choiceId} className="flex flex-wrap gap-1 rounded-xl border border-white/10 bg-black/20 p-1">
+          {PASTE_CHOICES.map((item) => (
+            <button
+              key={item.value}
+              type="button"
+              role="radio"
+              aria-checked={pasteWhat === item.value}
+              onClick={() => updateSpeech({ pasteWhat: item.value })}
+              className={cn(
+                'h-9 rounded-lg px-3 text-sm font-semibold transition-colors',
+                pasteWhat === item.value ? 'bg-white/10 text-ink' : 'text-mist hover:text-ink',
+              )}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <p className="text-sm text-mist">{choice.detail}</p>
+      </div>
       <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          onClick={() => grammar && void typeText(grammar.formattedText)}
-          disabled={!grammar || !inDesktop}
-          className={buttonStyles.secondary}
-        >
+        <button type="button" onClick={() => last && void typeText(last)} disabled={!last || !inDesktop} className={buttonStyles.secondary}>
           <ClipboardPaste aria-hidden className="size-4" />
-          Type the last sentence now
+          Type the last one now
         </button>
         {lastPasteDetail && <span className="text-sm text-mist">{lastPasteDetail}</span>}
       </div>

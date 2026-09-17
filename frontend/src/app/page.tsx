@@ -135,7 +135,7 @@ function ShellContent({ profile, onProfileChange, muted, onMutedChange }: ShellC
       const leaving = profile === 'pitch_demo';
       onProfileChange(leaving ? lastRegularProfileRef.current : 'pitch_demo');
       setView('home');
-      setAnnouncement(leaving ? 'Pitch Mode off' : 'Pitch Mode on');
+      setAnnouncement(leaving ? 'Studio off' : 'Studio on');
     }
   });
 

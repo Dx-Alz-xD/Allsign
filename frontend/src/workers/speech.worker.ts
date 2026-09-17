@@ -2,7 +2,7 @@
  * Speech token stream to the grammar engine (backend `POST /api/grammar/translate`).
  *
  * Token batches come from the main thread's token sources: typed text, opt-in
- * system dictation (lib/speech/tokenSource.ts) and the Pitch Mode demo
+ * system dictation (lib/speech/tokenSource.ts) and the Studio demo
  * script. Nothing is recognised here; the worker only segments, orders and
  * delivers tokens. Final batches collect into an utterance, which closes when
  *   - the batch ends it (`endOfUtterance`, e.g. a typed sentence),

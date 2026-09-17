@@ -1,6 +1,6 @@
 /**
  * Delivery helpers on the speech output path: the caregiver broadcast queue, the direct paste queue,
- * the sign manifest behind the Pitch Mode overlay, and HUD block counting.
+ * the sign manifest behind the Studio overlay, and HUD block counting.
  */
 
 import { describe, expect, it } from 'vitest';

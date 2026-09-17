@@ -24,7 +24,7 @@ interface TextReconstructionProps {
   /** The grammar engine's parse budget; shows whether this parse met it. */
   budgetMs?: number;
   source?: GrammarSource | null;
-  /** Shows the grammar engine's sentence as the quick, lower-confidence answer with Gemini's answer under it. */
+  /** Shows the grammar engine's sentence as the quick, lower-confidence answer with the context-aware answer under it. */
   geminiAnswer?: boolean;
   refinement?: SentenceRefinement | null;
   /** Types Gemini's answer into the focused app; leave out where that is not possible. */
@@ -41,7 +41,7 @@ function ConfidenceBadge({ level }: { level: 'lower' | 'higher' }) {
         level === 'lower' ? 'bg-warn/10 text-warn ring-warn/30' : 'bg-neon-cyan/10 text-neon-cyan ring-neon-cyan/30',
       )}
     >
-      {level === 'lower' ? 'Lower confidence · grammar rules' : 'Higher confidence · Gemini'}
+      {level === 'lower' ? 'Lower confidence · grammar rules' : 'Higher confidence'}
     </span>
   );
 }
@@ -56,13 +56,13 @@ function GeminiAnswer({
   onType?: (text: string) => void;
 }) {
   if (!refinement) {
-    return <p className="text-sm text-mist">Gemini answers the next sentence you rebuild here.</p>;
+    return <p className="text-sm text-mist">The context-aware answer appears for the next sentence you rebuild here.</p>;
   }
   if (refinement.status === 'pending') {
     return (
       <p className="flex items-center gap-2.5 rounded-xl border border-dashed border-neon-cyan/30 px-4 py-3 text-mist">
         <LoaderCircle aria-hidden className="size-5 shrink-0 animate-spin text-neon-cyan motion-reduce:animate-none" />
-        Gemini is reading what was said in context&hellip;
+        Reading what was said in context&hellip;
       </p>
     );
   }

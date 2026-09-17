@@ -8,7 +8,11 @@
     "build": "next build",
     "start": "next start --port 3100",
     "typecheck": "tsc --noEmit",
-    "lint": "next lint"
+    "lint": "next lint",
+    "predev": "node scripts/sync-shared.mjs",
+    "prebuild": "node scripts/sync-shared.mjs",
+    "shared:sync": "node scripts/sync-shared.mjs",
+    "shared:check": "node scripts/sync-shared.mjs --check"
   },
   "dependencies": {
     "animejs": "^4.3.0",

@@ -1,6 +1,6 @@
 {
   "name": "frontend",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Voicematics desktop app (Electron + Next.js 14)",
   "main": "dist-electron/main.js",
   "scripts": {

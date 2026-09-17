@@ -1,0 +1,80 @@
+# Builds the Voicematics desktop installer and attaches it to a GitHub release.
+#
+# Triggers: pushing a tag like v1.0.0, or "Run workflow" in the Actions tab (tags the version in
+# frontend/package.json). The website's download link is
+# https://github.com/Dx-Alz-xD/Voicematics/releases/latest/download/Voicematics-Setup.exe, so the asset name
+# must stay exactly Voicematics-Setup.exe (see "build" in frontend/package.json).
+name: Release desktop app
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci --no-audit --no-fund
+
+      - name: Version from the tag
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "tag=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=v$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Static export
+        run: npm run build
+        env:
+          NEXT_PUBLIC_BACKEND_URL: https://voicematics-api.onrender.com
+          NEXT_PUBLIC_WEBSITE_URL: https://voicematics.vercel.app
+          NEXT_PUBLIC_STUN_SERVER: stun:stun.l.google.com:19302
+          NEXT_PUBLIC_APP_VERSION: ${{ steps.version.outputs.tag }}
+
+      - name: Compile the main process
+        run: npm run electron:compile
+
+      - name: Package the installer
+        run: npx electron-builder --win --publish never
+        env:
+          # electron-builder must not try to publish on its own; the release step below does it.
+          GH_TOKEN: ""
+
+      - name: Keep the installer as a workflow artifact too
+        uses: actions/upload-artifact@v4
+        with:
+          name: Voicematics-Setup
+          path: frontend/release/Voicematics-Setup.exe
+          if-no-files-found: error
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Voicematics ${{ steps.version.outputs.tag }}
+          files: frontend/release/Voicematics-Setup.exe
+          fail_on_unmatched_files: true
+          body: |
+            Voicematics desktop app for Windows (x64).
+
+            Download `Voicematics-Setup.exe`, run it, and sign in with your Voicematics account.
+            Windows SmartScreen may warn because the installer is not code-signed: choose "More info" and "Run anyway".

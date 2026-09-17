@@ -36,3 +36,6 @@ Thumbs.db
 *.tsbuildinfo
 # Playwright MCP screenshots and snapshots
 .playwright-mcp/
+
+# Packaged desktop builds
+frontend/release/

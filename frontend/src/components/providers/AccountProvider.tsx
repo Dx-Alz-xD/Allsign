@@ -21,7 +21,7 @@ import type {
   Feature,
   LicenseVerifyResponse,
 } from '@shared/types';
-import { api, ApiError, onSessionRejected, setAuthToken } from '@/lib/api/client';
+import { api, ApiError, onSessionRejected, setAuthToken, waitForBackend } from '@/lib/api/client';
 import { FREE_ENTITLEMENTS, hasFeature } from '@/lib/account/plans';
 import {
   clearRecord,
@@ -72,6 +72,8 @@ export interface AccountContextValue {
   /** Tries the saved account again after the server was unreachable. */
   retry: () => Promise<void>;
   canRetry: boolean;
+  /** The server is being woken up before an account request; the sign-in screen says so. */
+  waking: boolean;
 }
 
 const AccountContext = createContext<AccountContextValue | null>(null);
@@ -196,12 +198,25 @@ export function AccountProvider({ children }: { children: ReactNode }) {
     );
   }, []);
 
+  const [waking, setWaking] = useState(false);
+
+  /** A sleeping hosted server answers its first request late; make sure it is up before an account request. */
+  const wake = useCallback(async () => {
+    setWaking(true);
+    try {
+      return await waitForBackend();
+    } finally {
+      setWaking(false);
+    }
+  }, []);
+
   const renew = useCallback((): Promise<void> => {
     if (renewingRef.current) return renewingRef.current;
     const run = (async () => {
       const current = recordRef.current;
       if (!current) return;
       try {
+        await wake();
         const session = await api.auth.devices.session({ deviceToken: current.deviceToken, hardwareId: await hardwareId() });
         await adopt(session);
       } catch (error) {
@@ -214,7 +229,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       if (renewingRef.current === run) renewingRef.current = null;
     });
     return run;
-  }, [adopt, forget, goOffline]);
+  }, [adopt, forget, goOffline, wake]);
   renewRef.current = renew;
 
   const refresh = useCallback(async () => {
@@ -280,6 +295,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
 
   const signIn = useCallback(
     async (credentials: AuthCredentials, mode: 'login' | 'signup') => {
+      await wake();
       const session = mode === 'signup' ? await api.auth.signup(credentials) : await api.auth.login(credentials);
       const machine = await hardwareId();
       const device = await api.auth.devices.register({ hardwareId: machine, label: deviceLabel() }, session.token);
@@ -297,7 +313,7 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       });
       await adopt(session);
     },
-    [adopt, persist],
+    [adopt, persist, wake],
   );
 
   const signOut = useCallback(
@@ -357,8 +373,9 @@ export function AccountProvider({ children }: { children: ReactNode }) {
       deleteAccount,
       retry,
       canRetry: status === 'signed-out' && record !== null,
+      waking,
     };
-  }, [deleteAccount, moveLicenceHere, notice, offline, record, refresh, retry, signIn, signOut, status, storage, token]);
+  }, [deleteAccount, moveLicenceHere, notice, offline, record, refresh, retry, signIn, signOut, status, storage, token, waking]);
 
   return <AccountContext.Provider value={value}>{children}</AccountContext.Provider>;
 }

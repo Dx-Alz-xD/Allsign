@@ -32,6 +32,9 @@ function describeError(error: unknown, mode: Mode): string {
     if (error.status >= 500) return 'The Voicematics server had a problem. Try again in a moment.';
     return error.message;
   }
+  if (error instanceof DOMException && error.name === 'AbortError') {
+    return 'The server took too long to answer. It may still be waking up; try again in a moment.';
+  }
   return mode === 'signup'
     ? `Voicematics could not reach its server at ${backendUrl()} to create your account.`
     : `Voicematics could not reach its server at ${backendUrl()}.`;
@@ -58,6 +61,7 @@ function Mark({ className, animated = true }: { className?: string; animated?: b
 }
 
 export function AccountLoading() {
+  const { waking } = useAccount();
   return (
     <main id="main" className="grid min-h-dvh place-items-center px-4 py-10">
       <div className="flex w-full max-w-md flex-col items-center gap-5 text-center" role="status">
@@ -65,7 +69,7 @@ export function AccountLoading() {
         <VoiceLine boot={false} className="h-16 max-w-xs" />
         <p className="flex items-center gap-2 text-mist">
           <LoaderCircle aria-hidden className="size-4 animate-spin motion-reduce:animate-none" />
-          Opening your account
+          {waking ? 'Waking up the server' : 'Opening your account'}
         </p>
       </div>
     </main>
@@ -96,7 +100,7 @@ function Field({ id, label, children, hint }: FieldProps) {
  * for every keystroke. Right: sign in or create an account. One entrance sequence runs when it opens.
  */
 export function SignInScreen() {
-  const { signIn, notice, canRetry, retry } = useAccount();
+  const { signIn, notice, canRetry, retry, waking } = useAccount();
   const { openModal } = useModals();
   const [mode, setMode] = useState<Mode>('login');
   const [email, setEmail] = useState('');
@@ -303,7 +307,7 @@ export function SignInScreen() {
               <div className="signin-field opacity-0">
                 <button type="submit" disabled={busy || !email.trim() || !password} className={cn(buttonStyles.primary, 'relative h-12 w-full overflow-hidden')}>
                   {busy && <LoaderCircle aria-hidden className="size-4 animate-spin motion-reduce:animate-none" />}
-                  {mode === 'login' ? (busy ? 'Signing in' : 'Sign in') : busy ? 'Creating account' : 'Create account'}
+                  {waking ? 'Waking up the server' : mode === 'login' ? (busy ? 'Signing in' : 'Sign in') : busy ? 'Creating account' : 'Create account'}
                   {busy && <span aria-hidden className="absolute inset-x-0 bottom-0 h-0.5 animate-[scan_1.2s_linear_infinite] bg-void/60 motion-reduce:hidden" />}
                 </button>
               </div>

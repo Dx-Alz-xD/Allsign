@@ -105,7 +105,28 @@ export function isPlanRequired(error: unknown): error is ApiError {
   return error instanceof ApiError && error.status === 403;
 }
 
-async function request<T>(path: string, init: RequestInit = {}, timeoutMs = 5000): Promise<T> {
+// The hosted service runs on a small instance that sleeps when idle: a cold start takes up to a minute and an
+// Argon2id password check a few seconds, so account requests get long timeouts and local reads short ones.
+export const DEFAULT_TIMEOUT_MS = 20_000;
+export const ACCOUNT_TIMEOUT_MS = 90_000;
+const WAKE_ATTEMPTS = 15;
+const WAKE_INTERVAL_MS = 5000;
+
+/** Polls /health/live until the server answers; false when it stayed silent for the whole wait. */
+export async function waitForBackend(onAttempt?: (attempt: number, attempts: number) => void): Promise<boolean> {
+  for (let attempt = 1; attempt <= WAKE_ATTEMPTS; attempt++) {
+    onAttempt?.(attempt, WAKE_ATTEMPTS);
+    try {
+      await request<LiveHealthResponse>('/health/live', {}, 6000);
+      return true;
+    } catch {
+      if (attempt < WAKE_ATTEMPTS) await new Promise((resolve) => setTimeout(resolve, WAKE_INTERVAL_MS));
+    }
+  }
+  return false;
+}
+
+async function request<T>(path: string, init: RequestInit = {}, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const headers = new Headers(init.headers);
@@ -188,9 +209,9 @@ export const api = {
 
   // Argon2id is deliberately slow (about 0.15 s per check), so these get a longer timeout.
   auth: {
-    signup: (body: AuthCredentials) => request<AuthSessionResponse>('/api/auth/signup', { method: 'POST', ...json(body) }, 10_000),
-    login: (body: AuthCredentials) => request<AuthSessionResponse>('/api/auth/login', { method: 'POST', ...json(body) }, 10_000),
-    me: (token: string) => request<AccountResponse>('/api/auth/me', { headers: { authorization: `Bearer ${token}` } }),
+    signup: (body: AuthCredentials) => request<AuthSessionResponse>('/api/auth/signup', { method: 'POST', ...json(body) }, ACCOUNT_TIMEOUT_MS),
+    login: (body: AuthCredentials) => request<AuthSessionResponse>('/api/auth/login', { method: 'POST', ...json(body) }, ACCOUNT_TIMEOUT_MS),
+    me: (token: string) => request<AccountResponse>('/api/auth/me', { headers: { authorization: `Bearer ${token}` } }, ACCOUNT_TIMEOUT_MS),
     deleteAccount: (body: AccountDeleteRequest) =>
       request<void>('/api/auth/me/delete', { method: 'POST', ...json(body) }, 10_000),
     devices: {

@@ -26,7 +26,7 @@ export function VocalAssistPanel() {
       <section aria-label="Live match" className="glass flex flex-col gap-4 rounded-2xl p-5">
         <h3 className="text-base font-semibold text-ink">Listening for your sounds</h3>
         {triggers.length === 0 ? (
-          <p className="text-mist">No triggers enrolled yet. Add one under Custom Triggers: a hum, a click, a pitch rise.</p>
+          <p className="text-mist">No gestures taught yet. Add one below: a hum, a click, a pitch rise.</p>
         ) : (
           <>
             <p className="text-mist">

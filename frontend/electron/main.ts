@@ -113,6 +113,9 @@ function createWindow(): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // Direct paste listens while the window is minimised or behind another app: keep timers, workers
+      // and the audio pipeline at full speed in the background.
+      backgroundThrottling: false,
     },
   });
 

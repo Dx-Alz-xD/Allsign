@@ -14,9 +14,7 @@ import { VocalAssistPanel } from '@/components/profiles/VocalAssistPanel';
 import { useAccount } from '@/components/providers/AccountProvider';
 import { useSession } from '@/components/providers/SessionProvider';
 import { Reveal } from '@/components/ui/Reveal';
-import { FeatureOverview } from '@/components/views/FeatureOverview';
 import { PROFILE_FEATURE } from '@/lib/account/plans';
-import type { ViewId } from '@/lib/navigation';
 import { getProfilePreset } from '@/lib/profiles';
 import { cn } from '@/lib/cn';
 
@@ -66,11 +64,9 @@ const LOCKED_PROFILE_DETAILS: Partial<Record<ProfileMode, string>> = {
 
 interface HomeViewProps {
   state: SystemState;
-  onProfileChange: (profile: ProfileMode) => void;
-  onSelectView: (view: ViewId) => void;
 }
 
-export function HomeView({ state, onProfileChange, onSelectView }: HomeViewProps) {
+export function HomeView({ state }: HomeViewProps) {
   const { has } = useAccount();
   if (state.activeProfile === 'pitch_demo') return <LivePitchDashboard />;
 
@@ -155,8 +151,6 @@ export function HomeView({ state, onProfileChange, onSelectView }: HomeViewProps
           />
         </dl>
       </section>
-
-      <FeatureOverview activeProfile={state.activeProfile} onProfileChange={onProfileChange} onSelectView={onSelectView} />
     </div>
   );
 }

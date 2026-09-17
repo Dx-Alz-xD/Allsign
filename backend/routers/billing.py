@@ -45,7 +45,7 @@ PLANS: list[PricingPlan] = [
         name="Free",
         priceCents=0,
         billingPeriod=None,
-        features=["ClearVoice grammar and direct paste", "Aphasia word finder", "Sensory HUD", "One acoustic trigger"],
+        features=["ClearVoice: on-device recognition, grammar and direct paste", "Sensory HUD", "One gesture"],
     ),
     PricingPlan(
         id="pro_monthly",
@@ -53,7 +53,7 @@ PLANS: list[PricingPlan] = [
         name="Pro Monthly",
         priceCents=1499,
         billingPeriod="monthly",
-        features=["Everything in Free", "DAF / FSF Fluency Coach", "Therapy vowel plane", "Unlimited triggers", "Caregiver link", "Session analytics and clinical reports"],
+        features=["Everything in Free", "DAF / FSF Fluency Coach", "Therapy vowel plane", "Unlimited triggers", "Caregiver link", "Session analytics"],
     ),
     PricingPlan(
         id="pro_annual",

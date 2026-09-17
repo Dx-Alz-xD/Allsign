@@ -1,13 +1,5 @@
 import type { LucideIcon } from 'lucide-react';
-import {
-  AudioLines,
-  AudioWaveform,
-  Eye,
-  HeartPulse,
-  MessageSquareText,
-  Mic,
-  Puzzle,
-} from 'lucide-react';
+import { AudioWaveform, Eye, HeartPulse, Hand, LayoutDashboard, MessageSquareText } from 'lucide-react';
 import type { ProfileMode } from '@shared/types';
 
 export interface ProfilePreset {
@@ -20,50 +12,50 @@ export interface ProfilePreset {
 export const PROFILE_PRESETS: readonly ProfilePreset[] = [
   {
     id: 'clearvoice',
-    label: 'ClearVoice Mode',
-    description: 'Tidies your speech into clear, grammatical text and pastes it where you type.',
+    label: 'ClearVoice',
+    description: 'Hears what you say, word for word, and rebuilds it into clear text that is typed where you are working.',
     icon: MessageSquareText,
   },
   {
     id: 'fluency',
-    label: 'Fluency Coach Mode',
+    label: 'Fluency Coach',
     description: 'Plays your voice back with a slight delay or pitch shift to support smoother speech.',
     icon: AudioWaveform,
   },
   {
     id: 'vocal_assist',
-    label: 'Vocal Assist AAC Mode',
-    description: 'Turns short sounds you can make into full phrases, spoken aloud or typed for you.',
-    icon: Mic,
+    label: 'Gesture Trainer',
+    description: 'Teach Voicematics short sounds you can make, and link each one to a phrase, a spoken message or a shortcut.',
+    icon: Hand,
   },
   {
     id: 'therapy',
-    label: 'Therapy Mode',
+    label: 'Therapy',
     description: 'Shows vowel targets and articulation accuracy for guided practice.',
     icon: HeartPulse,
   },
   {
-    id: 'aphasia',
-    label: 'Aphasia Mode',
-    description: 'Rebuilds missing or out-of-order words into complete sentences using fixed grammar rules.',
-    icon: Puzzle,
-  },
-  {
     id: 'sensory',
-    label: 'Sensory HUD Mode',
+    label: 'Sensory HUD',
     description: 'Shows volume, pitch, and voice strain as visual cues on screen.',
     icon: Eye,
   },
   {
     id: 'pitch_demo',
-    label: 'Pitch Demo Mode',
-    description: 'Shows audio analysis, text reconstruction, and caregiver telemetry side by side for live demos.',
-    icon: AudioLines,
+    label: 'Studio',
+    description: 'Audio analysis, text reconstruction and caregiver telemetry side by side.',
+    icon: LayoutDashboard,
   },
 ];
+
+/** Aphasia Mode was folded into ClearVoice; saved data with that profile still loads. */
+export const RETIRED_PROFILES: readonly ProfileMode[] = ['aphasia'];
 
 export const DEFAULT_PROFILE: ProfileMode = 'clearvoice';
 
 export function getProfilePreset(id: ProfileMode): ProfilePreset {
-  return PROFILE_PRESETS.find((preset) => preset.id === id) ?? PROFILE_PRESETS[0];
+  const match = PROFILE_PRESETS.find((preset) => preset.id === id);
+  if (match) return match;
+  // A retired profile shows as the mode that replaced it.
+  return { ...PROFILE_PRESETS[0], id };
 }

@@ -43,7 +43,7 @@ function capitalise(sentence: string): string {
 
 type Phase = 'idle' | 'parsing' | 'done';
 
-export function AphasiaTab() {
+export function ClearVoiceTab() {
   const [input, setInput] = useState(EXAMPLES[0]);
   const [phase, setPhase] = useState<Phase>('idle');
   const [output, setOutput] = useState('');
@@ -66,7 +66,7 @@ export function AphasiaTab() {
     let text: string;
     let measured: number;
     try {
-      const response = await api.grammar({ rawSpeechTokens: tokens, sourceLang: 'en', targetProfile: 'aphasia' });
+      const response = await api.grammar({ rawSpeechTokens: tokens, sourceLang: 'en', targetProfile: 'clearvoice' });
       text = response.formattedText;
       measured = response.executionLatencyMs;
       setSource('engine');
@@ -92,10 +92,10 @@ export function AphasiaTab() {
   return (
     <div className="grid gap-6 lg:grid-cols-2">
       <div>
-        <label htmlFor="aphasia-input" className="label">
+        <label htmlFor="clearvoice-input" className="label">
           Speech as it came out
         </label>
-        <textarea id="aphasia-input" value={input} onChange={(event) => setInput(event.target.value)} rows={3} className="field font-mono text-lg" />
+        <textarea id="clearvoice-input" value={input} onChange={(event) => setInput(event.target.value)} rows={3} className="field font-mono text-lg" />
         <div className="mt-3 flex flex-wrap gap-2">
           {EXAMPLES.map((example) => (
             <button key={example} type="button" onClick={() => setInput(example)} className="rounded-full border border-white/10 px-3 py-1 text-xs text-smoke hover:border-ember/50 hover:text-bone">

@@ -206,7 +206,7 @@ export function TermsOfServiceModal({ open, onClose, section }: TermsOfServiceMo
             under Account.
           </p>
           <p>
-            <strong>Free</strong> includes ClearVoice, Aphasia Mode, the Sensory HUD, Pitch Demo, and one acoustic trigger.{' '}
+            <strong>Free</strong> includes ClearVoice, the Sensory HUD, Studio, and one gesture.{' '}
             <strong>Pro</strong> and <strong>Lifetime</strong> add the Fluency Coach, Therapy Mode, unlimited triggers, sharing
             over the Caregiver Link, session analytics, and clinical reports. Plans are bought and managed on the Voicematics
             website.

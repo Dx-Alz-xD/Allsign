@@ -26,7 +26,7 @@ const MAX_TOKENS = 256;
 const MAX_TOKEN_CHARS = 64;
 
 const ALERT_KINDS: ReadonlySet<CaregiverAlert['kind']> = new Set(['vocal-block', 'fatigue', 'emergency', 'trigger']);
-const SPEECH_SOURCES: ReadonlySet<SpeechSource> = new Set(['manual', 'system-dictation', 'demo']);
+const SPEECH_SOURCES: ReadonlySet<SpeechSource> = new Set(['manual', 'system-dictation', 'on-device', 'demo']);
 
 type Record_ = Record<string, unknown>;
 

@@ -39,3 +39,6 @@ Thumbs.db
 
 # Packaged desktop builds
 frontend/release/
+
+# ONNX Runtime binaries copied at build time (scripts/sync-ort.mjs)
+frontend/public/ort/

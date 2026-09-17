@@ -21,7 +21,7 @@ import { HomeView } from '@/components/views/HomeView';
 import { SettingsView } from '@/components/views/SettingsView';
 import { TriggersView } from '@/components/views/TriggersView';
 import { useHotkeyAction } from '@/hooks/useHotkeyAction';
-import { NAV_ITEMS, type ViewId } from '@/lib/navigation';
+import { currentEntry, type ModeItem, type ViewId } from '@/lib/navigation';
 import { DEFAULT_PROFILE } from '@/lib/profiles';
 import { cn } from '@/lib/cn';
 
@@ -71,7 +71,7 @@ function ShellContent({ profile, onProfileChange, muted, onMutedChange }: ShellC
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
 
-  const current = NAV_ITEMS.find((item) => item.id === view) ?? NAV_ITEMS[0];
+  const current = currentEntry(view, profile);
   const wide = view === 'home' && profile === 'pitch_demo';
 
   const systemState: SystemState = {
@@ -86,6 +86,14 @@ function ShellContent({ profile, onProfileChange, muted, onMutedChange }: ShellC
     setNavOpen(false);
     requestAnimationFrame(() => headingRef.current?.focus());
   }, []);
+
+  const selectMode = useCallback(
+    (item: ModeItem) => {
+      onProfileChange(item.profile);
+      selectView(item.view);
+    },
+    [onProfileChange, selectView],
+  );
 
   const closeNav = useCallback(() => {
     setNavOpen(false);
@@ -137,8 +145,6 @@ function ShellContent({ profile, onProfileChange, muted, onMutedChange }: ShellC
         {announcement}
       </p>
       <Navbar
-        profile={profile}
-        onProfileChange={onProfileChange}
         navOpen={navOpen}
         onToggleNav={() => setNavOpen((open) => !open)}
         menuButtonRef={menuButtonRef}
@@ -150,7 +156,7 @@ function ShellContent({ profile, onProfileChange, muted, onMutedChange }: ShellC
       <EmergencyAlertDialog open={emergencyOpen} onClose={closeEmergency} delivery={emergencyDelivery} />
 
       <div className="flex">
-        <Sidebar active={view} onSelect={selectView} mobileOpen={navOpen} onMobileClose={closeNav} />
+        <Sidebar active={view} activeProfile={profile} onSelect={selectView} onSelectMode={selectMode} mobileOpen={navOpen} onMobileClose={closeNav} />
 
         <main id="main" tabIndex={-1} className="min-w-0 flex-1 px-4 py-6 focus:outline-none sm:px-6 lg:px-10 lg:py-10">
           <div className={cn('mx-auto', wide ? 'max-w-[112rem]' : 'max-w-5xl')}>
@@ -164,7 +170,7 @@ function ShellContent({ profile, onProfileChange, muted, onMutedChange }: ShellC
             <SessionBar className="mb-6" />
 
             <Reveal id={view}>
-              {view === 'home' && <HomeView state={systemState} onProfileChange={onProfileChange} onSelectView={selectView} />}
+              {view === 'home' && <HomeView state={systemState} />}
               {view === 'analytics' && <AnalyticsView />}
               {view === 'triggers' && <TriggersView />}
               {view === 'caregiver' && <CaregiverView />}

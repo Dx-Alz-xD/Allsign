@@ -3,17 +3,13 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import { animate } from 'animejs';
 import { AudioWaveform, CircleUserRound, Menu, Mic, MicOff, Settings, WifiOff, X } from 'lucide-react';
-import type { ProfileMode } from '@shared/types';
 import { useAccount } from '@/components/providers/AccountProvider';
 import { useSession } from '@/components/providers/SessionProvider';
 import { reducedMotion } from '@/lib/motion';
-import { ProfileSwitcher } from '@/components/ui/ProfileSwitcher';
 import { PLAN_NAMES } from '@/lib/account/plans';
 import { cn } from '@/lib/cn';
 
 interface NavbarProps {
-  profile: ProfileMode;
-  onProfileChange: (profile: ProfileMode) => void;
   navOpen: boolean;
   onToggleNav: () => void;
   menuButtonRef: RefObject<HTMLButtonElement>;
@@ -24,8 +20,6 @@ interface NavbarProps {
 }
 
 export function Navbar({
-  profile,
-  onProfileChange,
   navOpen,
   onToggleNav,
   menuButtonRef,
@@ -117,7 +111,6 @@ export function Navbar({
               </span>
             )}
           </button>
-          <ProfileSwitcher value={profile} onChange={onProfileChange} />
         </div>
       </div>
     </header>

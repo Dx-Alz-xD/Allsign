@@ -1,8 +1,8 @@
-"""Which model the agents talk to.
+"""Which model the sentence refiner talks to.
 
 Gemini is the default. When a Gemini request fails for any reason (bad key, rate limit, outage, timeout)
 the same request is retried on Groq. With only one key set that provider is used alone; with none the
-agents are unavailable and the API says so instead of guessing.
+refiner is unavailable and the API says so instead of guessing.
 """
 
 from functools import lru_cache
@@ -57,11 +57,6 @@ def build_model(gemini_fallbacks: tuple[str, ...] = ()) -> Model:
     if len(models) == 1:
         return models[0]
     return FallbackModel(models[0], *models[1:], fallback_on=_any_failure)
-
-
-@lru_cache(maxsize=1)
-def agent_model() -> Model:
-    return build_model()
 
 
 @lru_cache(maxsize=1)

@@ -254,7 +254,7 @@ class LicenseInfo(BaseModel):
 # Mirror Feature in shared/types.ts and web_auth/plans.py.
 Feature = Literal[
     "clearvoice", "aphasia", "sensory", "vocal_assist", "fluency", "therapy",
-    "unlimited_triggers", "caregiver_link", "analytics", "clinical_reports",
+    "unlimited_triggers", "caregiver_link", "analytics",
 ]
 
 class Entitlements(BaseModel):

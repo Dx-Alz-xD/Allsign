@@ -41,14 +41,12 @@ import type {
   ProfileMode,
   RefineProfile,
   SessionAnalytics,
-  SessionLog,
   SpeechSource,
 } from '@shared/types';
 import { useAccount } from '@/components/providers/AccountProvider';
 import { useSettings } from '@/components/providers/SettingsProvider';
 import { useAudioPipeline, type AudioPipeline } from '@/hooks/useAudioPipeline';
 import { makeAlert, performTriggerAction, typeIntoActiveApp, type ActionOutcome } from '@/lib/actions';
-import { SessionLogRecorder } from '@/lib/analytics/sessionLog';
 import { api, ApiError, backendUrl, backendWebSocketUrl, getAuthToken } from '@/lib/api/client';
 import { getAudioEngine, type EngineSnapshot, type FluencySettings } from '@/lib/audio/engine';
 import { DEMO_TOKEN_SCRIPT, startSimulatedAudio, simulatedGrammarAt, simulatedPeerAt } from '@/lib/hud/simulated';
@@ -58,7 +56,9 @@ import { createPasteQueue } from '@/lib/output/pasteQueue';
 import { CaregiverLink, generateClientId, toPeerLinkState, type CaregiverLinkState } from '@/lib/peer/caregiverLink';
 import type { Delivery } from '@/lib/peer/outbox';
 import { iceServersFrom } from '@/lib/settings/network';
-import { SystemDictationSource, systemDictationAvailable, type TokenSourceKind } from '@/lib/speech/tokenSource';
+import { Recognizer, type Recognition, type RecognizerState } from '@/lib/speech/recognizer';
+import { SystemDictationSource, systemDictationAvailable, tokenize, type TokenSourceKind } from '@/lib/speech/tokenSource';
+import { UtteranceRecorder } from '@/lib/speech/utteranceRecorder';
 import type { SpeechWorkerRequest, SpeechWorkerResponse } from '@/workers/speech.worker';
 import type { TriggerMatch } from '@/workers/trigger.worker';
 
@@ -73,6 +73,36 @@ const DEFAULT_AST_BUDGET_MS = 10;
 /** Pitch Mode replays one demo sentence through the real grammar engine this often. */
 const DEMO_SENTENCE_INTERVAL_MS = 8000;
 const CLIENT_ID_STORAGE_KEY = 'omnivoice:caregiver-client-id';
+const RAW_TRANSCRIPT_KEY = 'omnivoice:raw-transcript';
+const RAW_TRANSCRIPT_LIMIT = 500;
+
+/** One utterance as the on-device recognizer heard it, before any grammar work. */
+export interface RawTranscriptEntry {
+  id: string;
+  text: string;
+  /** Epoch ms when it was recognised. */
+  at: number;
+  durationMs: number;
+  decodeMs: number;
+}
+
+function loadRawTranscript(): RawTranscriptEntry[] {
+  try {
+    const raw = window.localStorage.getItem(RAW_TRANSCRIPT_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? (parsed as RawTranscriptEntry[]).filter((entry) => typeof entry?.text === 'string' && typeof entry.at === 'number') : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRawTranscript(entries: RawTranscriptEntry[]): void {
+  try {
+    window.localStorage.setItem(RAW_TRANSCRIPT_KEY, JSON.stringify(entries));
+  } catch {
+    // Storage full or blocked: the list still lives for this session.
+  }
+}
 /** Earlier sentences sent with each Gemini request, so it can follow the conversation. */
 const REFINE_CONTEXT_SENTENCES = 6;
 /** backend sentence_refiner.MAX_SENTENCE_CHARS */
@@ -155,6 +185,16 @@ export interface SessionContextValue {
   dictationActive: boolean;
   setDictationActive: (active: boolean) => void;
 
+  /** The on-device recognizer (Whisper in a worker): model download, readiness, backlog. */
+  recognizer: RecognizerState;
+  /** True while the microphone feeds the recognizer. */
+  listening: boolean;
+  /** Turns verbatim recognition on (starting the microphone if needed) or off. */
+  setListening: (active: boolean) => Promise<void>;
+  /** Everything heard this session, exactly as recognised, newest first. */
+  rawTranscript: RawTranscriptEntry[];
+  clearRawTranscript: () => void;
+
   directPasteActive: boolean;
   setDirectPasteActive: (active: boolean) => void;
   lastPasteDetail: string | null;
@@ -181,7 +221,6 @@ export interface SessionContextValue {
   /** Saves the session to the account's history; null when it is too short or the plan has no analytics. */
   recordSession: () => Promise<SessionAnalytics | null>;
   /** Biomarker samples, feedback changes and blocks of the current session, for a clinical report. */
-  getSessionLog: () => SessionLog | null;
   /** Starts the session statistics and the report log over, keeping the microphone on. */
   startNewSession: () => void;
 }
@@ -207,7 +246,6 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
   const account = useAccount();
   const analyticsRef = useRef(account.has('analytics'));
   analyticsRef.current = account.has('analytics');
-  const sessionLogRef = useRef(new SessionLogRecorder());
   const engine = useMemo(() => getAudioEngine(), []);
   const [engineSnapshot, setEngineSnapshot] = useState<EngineSnapshot>(() => engine.getSnapshot());
   const [warning, setWarning] = useState<string | null>(null);
@@ -236,6 +274,20 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
 
   const [directPasteActive, setDirectPasteActiveState] = useState(false);
   const [lastPasteDetail, setLastPasteDetail] = useState<string | null>(null);
+
+  const [recognizer, setRecognizer] = useState<RecognizerState>(() => ({
+    status: 'off',
+    model: settings.speech.recognizerModel,
+    device: null,
+    progress: { fraction: null, loadedMb: 0, totalMb: 0 },
+    error: null,
+    pending: 0,
+  }));
+  const [listening, setListeningState] = useState(false);
+  const [rawTranscript, setRawTranscript] = useState<RawTranscriptEntry[]>(() => loadRawTranscript());
+  const recognizerRef = useRef<Recognizer | null>(null);
+  const recorderRef = useRef<UtteranceRecorder | null>(null);
+  const listeningRef = useRef(false);
 
   const [link, setLink] = useState<CaregiverLinkState | null>(null);
   const [alerts, setAlerts] = useState<CaregiverAlert[]>([]);
@@ -303,6 +355,9 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
     onTriggerMatch,
     onWarning: setWarning,
     onError: setWarning,
+    onPcm: (samples) => {
+      if (listeningRef.current) recorderRef.current?.push(samples);
+    },
   });
   const {
     attachCapture,
@@ -337,7 +392,6 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
     engine.applyFluency(feedback);
     engine.setFeedbackEnabled(feedbackEnabled);
     resetPipeline();
-    sessionLogRef.current.start(performance.now());
   }, [attachCapture, engine, feedback, feedbackEnabled, resetPipeline, settings.audio.inputDeviceId, settings.audio.outputDeviceId]);
 
   const live = engineSnapshot.state === 'running' && pipeline.status === 'running';
@@ -372,22 +426,10 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
     [engine],
   );
 
-  useEffect(() => {
-    sessionLogRef.current.feedbackChanged(feedbackEnabled, feedback.dafDelayMs, feedback.fsfOctaveShift, performance.now());
-  }, [feedback.dafDelayMs, feedback.fsfOctaveShift, feedbackEnabled]);
-
   const startNewSession = useCallback(() => {
     resetPipeline();
     conversationRef.current = [];
-    sessionLogRef.current.start(performance.now());
   }, [resetPipeline]);
-
-  const getSessionLog = useCallback((): SessionLog | null => {
-    const recorder = sessionLogRef.current;
-    if (!recorder.started) return null;
-    const { speakingMs, ready } = pipeline.snapshotRef.current.cadence;
-    return recorder.toLog(profileRef.current, ready ? speakingMs : null, performance.now());
-  }, [pipeline.snapshotRef]);
 
   useEffect(() => {
     engine.applyFluency(feedback);
@@ -413,18 +455,6 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       ticks += 1;
 
       const snapshot = pipeline.snapshotRef.current;
-      sessionLogRef.current.sample(
-        {
-          voiced: snapshot.voiced,
-          biomarkersReady: snapshot.biomarkersReady,
-          jitterPercent: snapshot.jitterPercent,
-          shimmerDb: snapshot.shimmerDb,
-          hnrDb: snapshot.hnrDb,
-          strainIndex: snapshot.vocalStrainIndex,
-          pitchHz: snapshot.pitchHz,
-        },
-        performance.now(),
-      );
       // While cadence.worker hears an utterance, speech.worker holds its idle flush so a block does not split a sentence.
       if (snapshot.cadence.utteranceActive !== voiceActive) {
         voiceActive = snapshot.cadence.utteranceActive;
@@ -437,7 +467,6 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       if (vocalBlockDetected && !blocked) blocksAtStart = blockCount;
       if (!vocalBlockDetected && blocked && blockCount >= blocksAtStart) {
         const alert = makeAlert('vocal-block', 'Vocal block', blockDurationMs);
-        sessionLogRef.current.block(blockDurationMs, performance.now());
         pushAlert(alert);
         broadcastToCaregiver({ type: 'alert', alert });
       }
@@ -663,6 +692,67 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
     [postSpeech],
   );
 
+  const onRecognition = useCallback(
+    (result: Recognition) => {
+      const text = result.text.trim();
+      if (!text) return;
+      setRawTranscript((current) => {
+        const next = [{ id: result.id, text, at: Date.now(), durationMs: result.durationMs, decodeMs: result.decodeMs }, ...current].slice(0, RAW_TRANSCRIPT_LIMIT);
+        saveRawTranscript(next);
+        return next;
+      });
+      const tokens = tokenize(text);
+      if (tokens.length > 0) postSpeech({ type: 'tokens', tokens, final: true, source: 'on-device', endOfUtterance: true });
+    },
+    [postSpeech],
+  );
+  const onRecognitionRef = useRef(onRecognition);
+  onRecognitionRef.current = onRecognition;
+
+  const setListening = useCallback(
+    async (active: boolean) => {
+      listeningRef.current = active;
+      setListeningState(active);
+      if (!active) {
+        recorderRef.current?.flush();
+        recorderRef.current = null;
+        recognizerRef.current?.stop();
+        recognizerRef.current = null;
+        setRecognizer((current) => ({ ...current, status: 'off', device: null, pending: 0 }));
+        return;
+      }
+      if (engine.getSnapshot().state !== 'running') {
+        await engine.start({ inputDeviceId: settings.audio.inputDeviceId, outputDeviceId: settings.audio.outputDeviceId });
+        const port = engine.capturePort;
+        if (port) attachCapture(port, (message) => engine.handleCaptureMessage(message));
+        engine.applyFluency(feedback);
+        engine.setFeedbackEnabled(feedbackEnabled);
+        resetPipeline();
+      }
+      const recognizerInstance = new Recognizer({ onState: setRecognizer, onResult: (result) => onRecognitionRef.current(result) }, settings.speech.recognizerModel);
+      recognizerRef.current = recognizerInstance;
+      recorderRef.current = new UtteranceRecorder({
+        onUtterance: (audio, durationMs) => {
+          if (!recognizerInstance.transcribe(audio, durationMs)) setWarning('Still loading the speech model; that sentence was not transcribed.');
+        },
+      });
+      await recognizerInstance.start(settings.speech.recognizerModel);
+    },
+    [attachCapture, engine, feedback, feedbackEnabled, resetPipeline, settings.audio.inputDeviceId, settings.audio.outputDeviceId, settings.speech.recognizerModel],
+  );
+
+  useEffect(
+    () => () => {
+      recognizerRef.current?.stop();
+    },
+    [],
+  );
+
+  const clearRawTranscript = useCallback(() => {
+    setRawTranscript([]);
+    saveRawTranscript([]);
+  }, []);
+
   const setDictationActive = useCallback(
     (active: boolean) => {
       if (!active) {
@@ -813,6 +903,11 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       dictationAvailable,
       dictationActive,
       setDictationActive,
+      recognizer,
+      listening,
+      setListening,
+      rawTranscript,
+      clearRawTranscript,
       directPasteActive,
       setDirectPasteActive,
       lastPasteDetail,
@@ -830,7 +925,6 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       backendOnline,
       warning,
       recordSession,
-      getSessionLog,
       startNewSession,
     }),
     [
@@ -863,6 +957,11 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       dictationAvailable,
       dictationActive,
       setDictationActive,
+      recognizer,
+      listening,
+      setListening,
+      rawTranscript,
+      clearRawTranscript,
       directPasteActive,
       setDirectPasteActive,
       lastPasteDetail,
@@ -880,7 +979,6 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       backendOnline,
       warning,
       recordSession,
-      getSessionLog,
       startNewSession,
     ],
   );

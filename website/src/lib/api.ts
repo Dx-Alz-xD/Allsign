@@ -1,15 +1,12 @@
 /**
- * The website's client for the FastAPI backend: accounts, licences, billing and the agents.
+ * The website's client for the FastAPI backend: accounts, licences, billing and the grammar engine.
  * Every contract is defined once in shared/types.ts and mirrored by backend/schemas.py.
  */
 
 import type {
   AccountResponse,
-  AgentStatus,
   AuthCredentials,
   AuthSessionResponse,
-  ChatRequest,
-  ChatResponse,
   CheckoutRequest,
   CheckoutResponse,
   GrammarRequest,
@@ -99,9 +96,5 @@ export const api = {
     plans: () => request<PricingPlan[]>('/api/billing/plans'),
     subscription: (token: string) => request<Subscription | null>('/api/billing/subscription', {}, token),
     checkout: (body: CheckoutRequest, token: string) => request<CheckoutResponse>('/api/billing/checkout', json(body), token),
-  },
-  agent: {
-    status: () => request<AgentStatus>('/api/agent/status'),
-    chat: (body: ChatRequest) => request<ChatResponse>('/api/agent/chat', json(body)),
   },
 };

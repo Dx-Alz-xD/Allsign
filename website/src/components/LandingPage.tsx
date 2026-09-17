@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import type { PricingPlan } from '@shared/types';
-import { AgentAssistant } from '@/components/AgentAssistant';
 import { AuthModal, type AuthMode } from '@/components/AuthModal';
 import { CheckoutModal } from '@/components/CheckoutModal';
 import { DashboardOverlay } from '@/components/DashboardOverlay';
@@ -10,6 +9,7 @@ import { DownloadSimulation } from '@/components/DownloadSimulation';
 import { Features } from '@/components/Features';
 import { ForCaregivers } from '@/components/ForCaregivers';
 import { Header } from '@/components/Header';
+import { HelpGuide } from '@/components/HelpGuide';
 import { Hero } from '@/components/Hero';
 import { Pipeline } from '@/components/Pipeline';
 import { Pricing } from '@/components/Pricing';
@@ -54,7 +54,7 @@ function Page() {
         }}
       />
       <DownloadSimulation url={downloadUrl} onClose={() => setDownloadUrl(null)} />
-      <AgentAssistant />
+      <HelpGuide />
     </>
   );
 }

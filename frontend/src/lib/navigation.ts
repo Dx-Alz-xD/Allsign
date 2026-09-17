@@ -1,6 +1,8 @@
 import type { LucideIcon } from 'lucide-react';
-import { Accessibility, ChartNoAxesColumn, CircleUserRound, House, Radio, Settings, Zap } from 'lucide-react';
-import type { Feature } from '@shared/types';
+import { Accessibility, ChartNoAxesColumn, CircleUserRound, Radio, Settings } from 'lucide-react';
+import type { Feature, ProfileMode } from '@shared/types';
+import { PROFILE_FEATURE } from '@/lib/account/plans';
+import { PROFILE_PRESETS, type ProfilePreset } from '@/lib/profiles';
 
 export type ViewId = 'home' | 'analytics' | 'triggers' | 'caregiver' | 'account' | 'settings' | 'accessibility';
 
@@ -13,25 +15,30 @@ export interface NavItem {
   feature?: Feature;
 }
 
+/** A mode in the sidebar: choosing it sets the profile and opens its view. */
+export interface ModeItem {
+  profile: ProfileMode;
+  label: string;
+  description: string;
+  icon: LucideIcon;
+  view: Extract<ViewId, 'home' | 'triggers'>;
+  feature: Feature | null;
+}
+
+function mode(preset: ProfilePreset, view: ModeItem['view'] = 'home'): ModeItem {
+  return { profile: preset.id, label: preset.label, description: preset.description, icon: preset.icon, view, feature: PROFILE_FEATURE[preset.id] };
+}
+
+/** The modes, in the order they appear. Gesture Trainer is the trigger workshop and the Vocal Assist profile in one. */
+export const MODE_ITEMS: readonly ModeItem[] = PROFILE_PRESETS.map((preset) => mode(preset, preset.id === 'vocal_assist' ? 'triggers' : 'home'));
+
 export const NAV_ITEMS: readonly NavItem[] = [
-  {
-    id: 'home',
-    label: 'Home',
-    description: 'Your active profile, live status, and everything Voicematics can do.',
-    icon: House,
-  },
   {
     id: 'analytics',
     label: 'Analytics',
-    description: 'Speaking rate, blocks, and fluency across your sessions, and clinical reports.',
+    description: 'Speaking rate, blocks and fluency across your sessions.',
     icon: ChartNoAxesColumn,
     feature: 'analytics',
-  },
-  {
-    id: 'triggers',
-    label: 'Custom Triggers',
-    description: 'Sounds you can make, linked to phrases or actions.',
-    icon: Zap,
   },
   {
     id: 'caregiver',
@@ -58,3 +65,12 @@ export const NAV_ITEMS: readonly NavItem[] = [
     icon: Accessibility,
   },
 ];
+
+/** The sidebar entry a (view, profile) pair belongs to, for the page heading and the active highlight. */
+export function currentEntry(view: ViewId, profile: ProfileMode): { label: string; description: string } {
+  if (view === 'home' || view === 'triggers') {
+    const item = MODE_ITEMS.find((candidate) => (view === 'triggers' ? candidate.view === 'triggers' : candidate.profile === profile));
+    if (item) return item;
+  }
+  return NAV_ITEMS.find((item) => item.id === view) ?? NAV_ITEMS[0];
+}

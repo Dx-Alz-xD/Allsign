@@ -1,26 +1,23 @@
 'use client';
 
 import { useId, useState, type FormEvent } from 'react';
-import { ClipboardPaste, Mic, MicOff, Send, TriangleAlert } from 'lucide-react';
+import { ClipboardPaste, Send, TriangleAlert } from 'lucide-react';
 import { buttonStyles } from '@/components/modals/Modal';
 import { Switch, inputStyles } from '@/components/modals/settings/controls';
+import { ListenControls, RawTranscript } from '@/components/profiles/ListenControls';
 import { useSession } from '@/components/providers/SessionProvider';
 import { SyntaxTree, TextReconstruction } from '@/components/ui/Reconstruction';
 import { tokenize } from '@/lib/speech/tokenSource';
 
 /**
  * Speech tokens in, grammatical sentence out, typed into the active app.
- * Tokens come from the text box (always) or system dictation (opt-in, where
- * the platform offers it); see lib/speech/tokenSource.ts for why.
+ * Tokens come from the on-device recognizer (ListenControls) or the text box.
  */
 export function TokenInput({ compact = false }: { compact?: boolean }) {
   const {
     submitTokens,
     grammarBusy,
     grammarError,
-    dictationAvailable,
-    dictationActive,
-    setDictationActive,
     interimTokens,
     backendOnline,
     geminiAnswer,
@@ -63,22 +60,6 @@ export function TokenInput({ compact = false }: { compact?: boolean }) {
           <Send aria-hidden className="size-4" />
           {grammarBusy ? 'Rebuilding' : 'Rebuild sentence'}
         </button>
-        {dictationAvailable && (
-          <button
-            type="button"
-            onClick={() => setDictationActive(!dictationActive)}
-            className={buttonStyles.secondary}
-            aria-pressed={dictationActive}
-          >
-            {dictationActive ? <MicOff aria-hidden className="size-4" /> : <Mic aria-hidden className="size-4" />}
-            {dictationActive ? 'Stop system dictation' : 'Use system dictation'}
-          </button>
-        )}
-        {dictationAvailable && (
-          <span className="text-sm text-mist">
-            System dictation hands audio to your browser vendor&apos;s recognizer, outside Voicematics&apos; no-model guarantee.
-          </span>
-        )}
       </div>
       <div className="flex flex-col gap-1">
         <Switch checked={geminiAnswer} onChange={setGeminiAnswer} label="Second answer from Gemini" describedBy={geminiDescriptionId} />
@@ -112,7 +93,7 @@ export function DirectPasteControls() {
       <Switch checked={directPasteActive} onChange={setDirectPasteActive} label="Direct paste" describedBy={describedBy} />
       <p id={describedBy} className="text-sm text-mist">
         {inDesktop
-          ? 'When on, every quick answer is typed into whichever app has keyboard focus.'
+          ? 'When on, every sentence rebuilt from your voice (or the text box) is typed into whichever app has keyboard focus, even while Voicematics is minimised. Turn on listening, switch to the other app, and speak.'
           : 'Direct paste needs the desktop app; in a browser the sentence stays here.'}
       </p>
       <div className="flex flex-wrap items-center gap-3">
@@ -131,7 +112,7 @@ export function DirectPasteControls() {
   );
 }
 
-/** The grammar engine's sentence with Gemini's context-aware answer under it, for ClearVoice and Aphasia Mode. */
+/** The grammar engine's sentence with Gemini's context-aware answer under it. */
 export function TwoAnswerReconstruction() {
   const { grammar, grammarSource, grammarRoundTripMs, astBudgetMs, geminiAnswer, refinement, typeText } = useSession();
   const inDesktop = typeof window !== 'undefined' && Boolean(window.omnivoice);
@@ -153,12 +134,16 @@ export function ClearVoicePanel() {
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
       <section aria-label="Sentence reconstruction" className="glass flex flex-col gap-5 rounded-2xl p-5">
-        <TokenInput />
+        <ListenControls />
+        <TokenInput compact />
         <TwoAnswerReconstruction />
       </section>
       <div className="flex flex-col gap-4">
         <section aria-label="Direct paste" className="glass rounded-2xl p-5">
           <DirectPasteControls />
+        </section>
+        <section aria-label="Raw transcript" className="glass rounded-2xl p-5">
+          <RawTranscript />
         </section>
         <section aria-label="Syntax tree" className="glass flex flex-col gap-3 rounded-2xl p-5">
           <h3 className="text-base font-semibold text-ink">Syntax tree</h3>

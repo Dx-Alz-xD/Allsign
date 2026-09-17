@@ -10,17 +10,20 @@
     "electron:compile": "tsc -p electron",
     "electron:dev": "npm run electron:compile && electron . --dev",
     "electron:start": "npm run build && npm run electron:compile && electron .",
-    "prebuild": "node scripts/sync-worklets.mjs",
+    "prebuild": "node scripts/sync-worklets.mjs && node scripts/sync-ort.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "worklets:sync": "node scripts/sync-worklets.mjs",
     "worklets:check": "node scripts/sync-worklets.mjs --check",
     "electron:pack": "npm run build && npm run electron:compile && electron-builder --publish never",
-    "electron:pack:win": "npm run build && npm run electron:compile && electron-builder --win --publish never"
+    "electron:pack:win": "npm run build && npm run electron:compile && electron-builder --win --publish never",
+    "predev": "node scripts/sync-ort.mjs",
+    "ort:sync": "node scripts/sync-ort.mjs"
   },
   "keywords": [],
   "type": "commonjs",
   "dependencies": {
+    "@huggingface/transformers": "^4.3.0",
     "@nut-tree-fork/nut-js": "^4.2.6",
     "animejs": "^4.5.0",
     "clsx": "^2.1.1",

@@ -8,6 +8,7 @@ import { buttonStyles } from '@/components/modals/Modal';
 import { inputStyles } from '@/components/modals/settings/controls';
 import { useAccount } from '@/components/providers/AccountProvider';
 import { useSession } from '@/components/providers/SessionProvider';
+import { ShortcutField } from '@/components/ui/ShortcutField';
 import { VocalAssistPanel } from '@/components/profiles/VocalAssistPanel';
 import { EmptyState } from '@/components/views/EmptyState';
 
@@ -82,7 +83,7 @@ export function TriggersView() {
 
       <section aria-labelledby="enrol-heading" className="glass rounded-2xl p-5">
         <h2 id="enrol-heading" className="text-xl font-semibold text-ink">
-          Add a trigger
+          Teach a gesture
         </h2>
         <p className="mt-1 max-w-prose text-mist">
           Name it, choose what it should do, then make the sound for about half a second when the countdown ends. Enrolment
@@ -99,7 +100,15 @@ export function TriggersView() {
             <label htmlFor={ids.action} className="text-sm font-bold text-mist">
               Action
             </label>
-            <select id={ids.action} value={action} onChange={(event) => setAction(event.target.value as Action)} className={inputStyles}>
+            <select
+              id={ids.action}
+              value={action}
+              onChange={(event) => {
+                setAction(event.target.value as Action);
+                setPhrase('');
+              }}
+              className={inputStyles}
+            >
               {ACTIONS.map(([value, label]) => (
                 <option key={value} value={value}>
                   {label}
@@ -109,17 +118,16 @@ export function TriggersView() {
             <p className="mt-1 text-sm text-mist">{ACTIONS.find(([value]) => value === action)?.[2]}</p>
           </div>
           <div className="sm:col-span-2">
-            <label htmlFor={ids.phrase} className="text-sm font-bold text-mist">
-              {action === 'OS_HOTKEY' ? 'Shortcut' : 'Phrase'}
-            </label>
-            <input
-              id={ids.phrase}
-              value={phrase}
-              onChange={(event) => setPhrase(event.target.value)}
-              placeholder={action === 'OS_HOTKEY' ? 'Control+Shift+M' : 'I need help, please'}
-              className={inputStyles}
-              required
-            />
+            {action === 'OS_HOTKEY' ? (
+              <ShortcutField value={phrase} onChange={setPhrase} label="Shortcut to press" hint="Click the box and press the keys, for example Ctrl + Shift + M. Escape cancels, Backspace clears." />
+            ) : (
+              <>
+                <label htmlFor={ids.phrase} className="text-sm font-bold text-mist">
+                  Phrase
+                </label>
+                <input id={ids.phrase} value={phrase} onChange={(event) => setPhrase(event.target.value)} placeholder="I need help, please" className={inputStyles} required />
+              </>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-3 sm:col-span-2">
             {capturing ? (
@@ -158,8 +166,8 @@ export function TriggersView() {
       </section>
 
       {triggers.length === 0 ? (
-        <EmptyState icon={Zap} title="No triggers yet">
-          A trigger links a short sound you can make, like a click or a hum, to a phrase that gets spoken or typed for you.
+        <EmptyState icon={Zap} title="No gestures yet">
+          A gesture is a short sound you can make, like a click or a hum, linked to a phrase that gets spoken or typed for you, or a shortcut that gets pressed.
         </EmptyState>
       ) : (
         <section aria-label="Enrolled triggers" className="glass rounded-2xl">

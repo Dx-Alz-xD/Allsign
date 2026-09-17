@@ -13,6 +13,7 @@ import { cn } from '@/lib/cn';
 const SOURCE_LABELS: Record<GrammarSource, string> = {
   manual: 'Typed',
   'system-dictation': 'Dictated',
+  'on-device': 'Heard by the on-device recognizer',
   demo: 'Demo sentence, parsed live by the grammar server',
   simulated: 'Simulated: the grammar server is offline',
 };

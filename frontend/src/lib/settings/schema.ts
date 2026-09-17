@@ -33,9 +33,13 @@ export interface NetworkSettings {
   turnCredential: string;
 }
 
+export type RecognizerModel = 'tiny' | 'base' | 'small';
+
 export interface SpeechSettings {
-  /** ClearVoice and Aphasia Mode also ask Gemini for a context-aware second answer. */
+  /** ClearVoice also asks Gemini for a context-aware second answer. */
   geminiAnswer: boolean;
+  /** The on-device Whisper model: bigger is more accurate and slower to load. */
+  recognizerModel: RecognizerModel;
 }
 
 export interface LegalSettings {
@@ -75,7 +79,7 @@ export function defaultSettings(): AppSettings {
       outputLabel: '',
     },
     network: defaultNetworkSettings(),
-    speech: { geminiAnswer: true },
+    speech: { geminiAnswer: true, recognizerModel: 'base' },
     legal: { termsVersion: null, termsAcknowledgedAt: null },
   };
 }
@@ -122,6 +126,7 @@ export function parseSettings(input: unknown): AppSettings {
     },
     speech: {
       geminiAnswer: typeof speech.geminiAnswer === 'boolean' ? speech.geminiAnswer : fallback.speech.geminiAnswer,
+      recognizerModel: speech.recognizerModel === 'tiny' || speech.recognizerModel === 'small' ? speech.recognizerModel : 'base',
     },
     legal: {
       termsVersion: typeof legal.termsVersion === 'string' ? legal.termsVersion : null,

@@ -17,18 +17,17 @@ export const FREE_ENTITLEMENTS: Entitlements = {
 
 export const FEATURE_NAMES: Record<Feature, string> = {
   clearvoice: 'ClearVoice',
-  aphasia: 'Aphasia Mode',
+  aphasia: 'ClearVoice',
   sensory: 'Sensory HUD',
-  vocal_assist: 'Vocal Assist triggers',
+  vocal_assist: 'Gesture Trainer',
   fluency: 'Fluency Coach',
-  therapy: 'Therapy Mode',
-  unlimited_triggers: 'Unlimited triggers',
+  therapy: 'Therapy',
+  unlimited_triggers: 'Unlimited gestures',
   caregiver_link: 'Caregiver Link',
   analytics: 'Session analytics',
-  clinical_reports: 'Clinical reports',
 };
 
-/** The plan feature behind each profile; Pitch Demo is open to everyone. Mirrors PROFILE_FEATURES in plans.py. */
+/** The plan feature behind each profile; Studio is open to everyone. Mirrors PROFILE_FEATURES in plans.py. */
 export const PROFILE_FEATURE: Record<ProfileMode, Feature | null> = {
   clearvoice: 'clearvoice',
   fluency: 'fluency',

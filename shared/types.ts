@@ -191,7 +191,7 @@ export interface CaregiverAlert {
 }
 
 // Where a reconstructed sentence came from: typed text, opt-in system dictation, or the Pitch Mode demo script.
-export type SpeechSource = 'manual' | 'system-dictation' | 'demo';
+export type SpeechSource = 'manual' | 'system-dictation' | 'on-device' | 'demo'; // on-device: the app's own Whisper, verbatim
 
 // A reconstructed sentence shared with the caregiver as soon as the grammar engine returns it.
 export interface CaregiverTranscript {
@@ -257,8 +257,7 @@ export type Feature =
   | 'therapy' // vowel plane and articulation targets
   | 'unlimited_triggers'
   | 'caregiver_link'
-  | 'analytics' // session history and summaries
-  | 'clinical_reports'; // the report agent
+  | 'analytics'; // session history and summaries
 
 export interface Entitlements {
   tier: PlanTier; // the tier the account is really on, after a lapsed subscription is settled
@@ -396,8 +395,8 @@ export interface CheckoutResponse {
 }
 
 // ---------------------------------------------------------------------------
-// Language-model agents (backend/agents/, routers/agents.py). They run beside the speech path, never in it:
-// the website chat, an authoring-time grammar compiler and a post-session report writer.
+// The one language-model agent (backend/agents/sentence_refiner.py, routers/agents.py). It runs beside the speech
+// path, never in it: ClearVoice's second answer, checked so it only uses words that were said.
 
 export type AgentProvider = 'gemini' | 'groq';
 
@@ -408,92 +407,9 @@ export interface AgentStatus {
   primary: AgentProvider | null;
 }
 
-export interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string; // 1 - 4000 characters
-}
-
-// POST /api/agent/chat; the last message must be from the user
-export interface ChatRequest {
-  messages: ChatMessage[]; // 1 - 40
-}
-
-export interface ToolCallRecord {
-  name: 'simulate_dsp_delay' | 'recommend_settings' | string;
-  args: Record<string, unknown>;
-  result: unknown; // DspDelayEstimate | SettingsRecommendation
-}
-
-export interface ChatResponse {
-  reply: string;
-  toolCalls: ToolCallRecord[];
-  modelName: string;
-}
-
-// simulate_dsp_delay(sample_rate): the desktop app's capture -> analysis latency arithmetic
-export interface DspDelayEstimate {
-  sampleRate: number;
-  captureQuantumMs: number;
-  antiAliasTaps: number;
-  antiAliasGroupDelayMs: number;
-  resampleRatio: number;
-  analysisHopMs: number;
-  processingMsPerHop: number;
-  endToEndMs: number;
-  averageMs: number;
-  worstCaseMs: number;
-  budgetMs: number;
-  withinBudget: boolean;
-}
-
-export type DisfluencyType = 'stuttering' | 'dysarthria' | 'aphasia';
-
-// recommend_settings(disfluency_type)
-export interface SettingsRecommendation {
-  disfluencyType: DisfluencyType;
-  dafDelayMs: number;
-  pitchShiftSemitones: number;
-  rationale: string;
-}
-
-// POST /api/agent/generate-report
-export interface StrainSample {
-  timestamp: number; // ms since the session started
-  jitterPercent: number;
-  shimmerDb: number;
-  hnrDb: number;
-  strainIndex: number; // 0 - 100
-  pitchHz?: number | null;
-}
-
-export interface FeedbackEvent {
-  timestamp: number; // ms since the session started
-  kind: 'daf' | 'fsf' | 'block'; // daf/fsf: feedback switched on or changed; block: a vocal block
-  value: number; // delay ms / octave shift / block duration ms
-}
-
-export interface SessionLog {
-  sessionId?: string | null;
-  startedAt?: string | null;
-  profileMode?: string | null;
-  samples: StrainSample[];
-  events: FeedbackEvent[];
-  dafDelayMs: number;
-  fsfOctaveShift: number;
-  speakingMs?: number | null;
-}
-
-// The numbers are computed by the backend from the log; the model writes only the paragraph.
-export interface ClinicalReport {
-  session_duration_minutes: number;
-  stuttering_reduction_index: number; // -1 .. 1
-  vocal_fatigue_alert: boolean;
-  slp_summary_paragraph: string;
-  recommended_daf_delay_ms: number;
-}
-
 // POST /api/agent/refine-sentence (signed in when the backend requires accounts). The second, context-aware answer
-// for ClearVoice and Aphasia Mode, asked for after the grammar engine's sentence is already on screen.
+// for ClearVoice, asked for after the grammar engine's sentence is already on screen. 'aphasia' is accepted from
+// older clients and treated as clearvoice.
 export type RefineProfile = 'clearvoice' | 'aphasia';
 
 export interface SentenceRefineRequest {
@@ -506,25 +422,4 @@ export interface SentenceRefineRequest {
 export interface RefinedSentence {
   text: string;
   modelName: string; // e.g. gemini-flash-latest; a lighter Gemini model or Groq when that one is busy
-}
-
-// POST /api/agent/compile-grammar (signed in when the backend requires accounts)
-export interface CompileGrammarRequest {
-  prompt: string; // 3 - 1000 characters
-  save?: boolean; // default true: append to backend/grammars/user_custom.cfg; only a local-mode backend saves
-}
-
-export interface CFGCompilerOutput {
-  grammar_rules: string[]; // NLTK productions, e.g. "WHQ_WHERE -> WH NP COP"
-  ast_transform_map: Record<string, string>; // non-terminal -> rebuilt word order
-  validation_status: boolean;
-}
-
-export interface CompiledGrammar {
-  request: string;
-  output: CFGCompilerOutput;
-  path: string;
-  validationRounds: number;
-  modelName: string;
-  saved: boolean;
 }

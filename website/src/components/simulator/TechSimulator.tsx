@@ -5,7 +5,7 @@ import { animate, createTimeline, stagger } from 'animejs';
 import { reducedMotion } from '@/lib/motion';
 import { AudioLines, Braces, Fingerprint, Waves, type LucideIcon } from 'lucide-react';
 import { AcousticHudTab } from '@/components/simulator/AcousticHudTab';
-import { AphasiaTab } from '@/components/simulator/AphasiaTab';
+import { ClearVoiceTab } from '@/components/simulator/ClearVoiceTab';
 import { FluencyTab } from '@/components/simulator/FluencyTab';
 import { VocalBridgeTab } from '@/components/simulator/VocalBridgeTab';
 
@@ -18,7 +18,7 @@ interface Tab {
 }
 
 const TABS: Tab[] = [
-  { id: 'aphasia', label: 'Aphasia Assist', caption: 'Grammar reordering', icon: Braces, render: () => <AphasiaTab /> },
+  { id: 'clearvoice', label: 'ClearVoice', caption: 'Grammar reordering', icon: Braces, render: () => <ClearVoiceTab /> },
   { id: 'vocal-bridge', label: 'Vocal Bridge', caption: 'Acoustic triggers', icon: Fingerprint, render: () => <VocalBridgeTab /> },
   { id: 'fluency', label: 'Fluency Coach', caption: 'Auditory biofeedback', icon: Waves, render: () => <FluencyTab /> },
   { id: 'hud', label: 'Acoustic HUD', caption: 'Formant tracking', icon: AudioLines, render: () => <AcousticHudTab /> },

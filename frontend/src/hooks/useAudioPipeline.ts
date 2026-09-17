@@ -153,6 +153,8 @@ export interface UseAudioPipelineOptions {
   onTriggerScores?: (best: TriggerScore | null, scores: TriggerScore[]) => void;
   /** Non-fatal notices, e.g. the trigger store being unreachable. */
   onWarning?: (message: string) => void;
+  /** A copy of every 10 ms capture chunk (16 kHz, [-1, 1]) for the on-device recognizer. */
+  onPcm?: (samples: Float32Array) => void;
   onError?: (message: string) => void;
 }
 
@@ -292,6 +294,7 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
     onTriggerMatch,
     onTriggerScores,
     onWarning,
+    onPcm,
     onError,
   } = options;
 
@@ -321,12 +324,14 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
   const onTriggerMatchRef = useRef(onTriggerMatch);
   const onTriggerScoresRef = useRef(onTriggerScores);
   const onWarningRef = useRef(onWarning);
+  const onPcmRef = useRef(onPcm);
   const onErrorRef = useRef(onError);
   onFrameRef.current = onFrame;
   onFormantFrameRef.current = onFormantFrame;
   onTriggerMatchRef.current = onTriggerMatch;
   onTriggerScoresRef.current = onTriggerScores;
   onWarningRef.current = onWarning;
+  onPcmRef.current = onPcm;
   onErrorRef.current = onError;
 
   const fail = useCallback((message: string) => {
@@ -646,7 +651,10 @@ export function useAudioPipeline(options: UseAudioPipelineOptions): AudioPipelin
     (buffer: ArrayBuffer, length: number) => {
       const worker = audioWorkerRef.current;
       if (!worker) return;
-      recordWaveform(new Float32Array(buffer, 0, length));
+      const samples = new Float32Array(buffer, 0, length);
+      recordWaveform(samples);
+      // The buffer is transferred below, so the recognizer gets its own copy.
+      onPcmRef.current?.(samples.slice());
       const request: AudioWorkerRequest = { type: 'process', buffer, length };
       worker.postMessage(request, [buffer]);
     },

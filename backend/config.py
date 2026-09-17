@@ -22,8 +22,8 @@ class Settings(BaseSettings):
     # is not allowed: with credentials on, it would let any site call this API.
     CORS_ORIGIN_REGEX: str = r"app://[^/\s]*|http://127\.0\.0\.1(:\d{1,5})?"
 
-    # The hosted service: triggers, presets, sessions, phoneme targets, the caregiver relay and clinical reports
-    # need a signed-in account, and each plan's features are enforced (ownership.py). Turn it off for a
+    # The hosted service: triggers, presets, sessions, phoneme targets, the caregiver relay and the sentence
+    # refiner need a signed-in account, and each plan's features are enforced (ownership.py). Turn it off for a
     # single-user install on your own machine, where requests without a token get every feature.
     REQUIRE_ACCOUNT: bool = True
 
@@ -34,22 +34,17 @@ class Settings(BaseSettings):
     AUTH_JWT_SECRET: SecretStr = SecretStr("")
     AUTH_TOKEN_TTL_MINUTES: int = 12 * 60
 
-    # Language-model agents (agents/): the website assistant, the grammar-rule compiler, the clinical report
-    # writer and the ClearVoice / Aphasia sentence refiner. None of them blocks the speech path (CLAUDE.md section 7). Gemini is tried first and
-    # Groq takes over when a Gemini call fails; with both keys empty the /api/agent endpoints answer 503.
+    # The one language-model agent (agents/sentence_refiner.py): ClearVoice's second answer. It never blocks the
+    # speech path (CLAUDE.md section 7). Gemini is tried first and Groq takes over when a Gemini call fails; with
+    # both keys empty /api/agent/refine-sentence answers 503.
     GEMINI_API_KEY: SecretStr = SecretStr("")
     GEMINI_MODEL: str = "gemini-flash-latest"
     # Tried after GEMINI_MODEL by the sentence refiner only, when that model is overloaded; empty to skip.
     GEMINI_REFINE_FALLBACK_MODEL: str = "gemini-flash-lite-latest"
     GROQ_API_KEY: SecretStr = SecretStr("")
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
-    AGENT_TIMEOUT_SECONDS: float = 60.0
-    # Requests per minute per client address across the /api/agent endpoints.
-    AGENT_RATE_LIMIT_PER_MINUTE: int = 20
     # Separate allowance for /api/agent/refine-sentence, which the desktop app calls once per spoken sentence.
     REFINE_RATE_LIMIT_PER_MINUTE: int = 60
-    # Where the grammar compiler saves validated rules; relative paths resolve against backend/.
-    CUSTOM_GRAMMAR_PATH: str = "./grammars/user_custom.cfg"
     # Where the website sends people for the desktop installer (electron-builder publishes there).
     INSTALLER_DOWNLOAD_URL: str = "https://github.com/Dx-Alz-xD/Voicematics/releases/latest/download/Voicematics-Setup.exe"
 

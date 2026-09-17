@@ -24,7 +24,6 @@ Feature = Literal[
     "unlimited_triggers",
     "caregiver_link",
     "analytics",  # session history and summaries
-    "clinical_reports",  # the report agent
 ]
 
 FREE_FEATURES: tuple[Feature, ...] = ("clearvoice", "aphasia", "sensory", "vocal_assist")
@@ -34,7 +33,6 @@ PRO_FEATURES: tuple[Feature, ...] = FREE_FEATURES + (
     "unlimited_triggers",
     "caregiver_link",
     "analytics",
-    "clinical_reports",
 )
 PLAN_FEATURES: dict[str, tuple[Feature, ...]] = {"free": FREE_FEATURES, "pro": PRO_FEATURES, "lifetime": PRO_FEATURES}
 FREE_TRIGGER_LIMIT = 1
@@ -49,7 +47,6 @@ FEATURE_NAMES: dict[str, str] = {
     "unlimited_triggers": "Unlimited triggers",
     "caregiver_link": "Caregiver Link",
     "analytics": "Session analytics",
-    "clinical_reports": "Clinical reports",
 }
 # The feature a saved profile preset needs; Pitch Demo is for presentations and open to everyone.
 PROFILE_FEATURES: dict[str, Feature | None] = {

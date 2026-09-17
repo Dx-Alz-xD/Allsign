@@ -11,13 +11,11 @@ import type {
   AccountDeleteRequest,
   AccountResponse,
   AgentStatus,
-  ClinicalReport,
   DeviceRegisterRequest,
   DeviceRegisterResponse,
   DeviceRevokeRequest,
   DeviceSessionRequest,
   LicenseDeactivateResponse,
-  SessionLog,
   AcousticMatchRequest,
   AcousticMatchResponse,
   AcousticTriggerProfile,
@@ -233,8 +231,6 @@ export const api = {
   agent: {
     status: () => request<AgentStatus>('/api/agent/status', {}, 3000),
     // The model call can take a while; the backend gives up after AGENT_TIMEOUT_SECONDS (60 s).
-    generateReport: (log: SessionLog) =>
-      request<ClinicalReport>('/api/agent/generate-report', { method: 'POST', ...json(log) }, 65_000),
     /** The context-aware second answer; a busy Gemini model can take several seconds before a lighter one answers. */
     refineSentence: (body: SentenceRefineRequest) =>
       request<RefinedSentence>('/api/agent/refine-sentence', { method: 'POST', ...json(body) }, 30_000),

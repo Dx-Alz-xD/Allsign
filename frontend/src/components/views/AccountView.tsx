@@ -10,18 +10,7 @@ import { useAccount } from '@/components/providers/AccountProvider';
 import { FEATURE_NAMES, PLAN_NAMES, openWebsite } from '@/lib/account/plans';
 import { cn } from '@/lib/cn';
 
-const ALL_FEATURES: readonly Feature[] = [
-  'clearvoice',
-  'aphasia',
-  'sensory',
-  'vocal_assist',
-  'fluency',
-  'therapy',
-  'unlimited_triggers',
-  'caregiver_link',
-  'analytics',
-  'clinical_reports',
-];
+const ALL_FEATURES: readonly Feature[] = ['clearvoice', 'sensory', 'vocal_assist', 'fluency', 'therapy', 'unlimited_triggers', 'caregiver_link', 'analytics'];
 
 const STORAGE_TEXT = {
   keychain: 'Kept encrypted with your system keychain.',

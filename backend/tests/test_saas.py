@@ -69,7 +69,7 @@ def trigger_body(name: str) -> dict:
 def test_plan_feature_sets():
     assert "fluency" not in PLAN_FEATURES["free"] and "clearvoice" in PLAN_FEATURES["free"]
     assert set(PLAN_FEATURES["pro"]) == set(PLAN_FEATURES["lifetime"])
-    assert {"fluency", "therapy", "unlimited_triggers", "caregiver_link", "analytics", "clinical_reports"} <= set(PLAN_FEATURES["pro"])
+    assert {"fluency", "therapy", "unlimited_triggers", "caregiver_link", "analytics"} <= set(PLAN_FEATURES["pro"])
 
 
 def test_checkout_unlocks_pro_features_everywhere(client: "TestClient"):
@@ -253,7 +253,7 @@ def test_app_data_needs_a_session(client: "TestClient"):
         assert response.status_code == 401, (path, response.text)
         assert response.headers["www-authenticate"] == "Bearer"
 
-    # The speech path, the word finder, pricing and the website assistant's status stay public.
+    # The speech path, the word finder, pricing and the refiner's status stay public.
     assert client.post("/api/grammar/translate", json={"rawSpeechTokens": ["me", "want", "water"]}).status_code == 200
     assert client.get("/api/phonemes/lookup", params={"prefix": ""}).status_code == 200
     assert client.get("/api/billing/plans").status_code == 200
@@ -335,42 +335,20 @@ def test_local_mode_keeps_every_feature(client: "TestClient"):
     assert signal_close_code(client, "speaker", bearer(free)) == 4402
 
 
-def test_clinical_reports_are_pro_and_saved_grammar_is_local_only(client: "TestClient", monkeypatch):
-    from agents import cfg_compiler, sentence_refiner, telemetry_reporter
+def test_sentence_refiner_needs_a_signed_in_account_when_accounts_are_required(client: "TestClient", monkeypatch):
+    from agents import sentence_refiner
     from routers import agents as agent_routes
 
     monkeypatch.setattr(agent_routes, "require_model", lambda *_: object())
     monkeypatch.setattr(sentence_refiner, "refine_sentence", lambda request, model: {"text": "I want water.", "modelName": "test"})
-    monkeypatch.setattr(telemetry_reporter, "generate_report", lambda log, model: {
-        "session_duration_minutes": 1.0, "stuttering_reduction_index": 0.0, "vocal_fatigue_alert": False,
-        "slp_summary_paragraph": "ok", "recommended_daf_delay_ms": 60,
-    })
-    saves: list[bool] = []
-
-    def fake_compile(prompt, model, save):
-        saves.append(save)
-        raise ValueError("stop here")
-
-    monkeypatch.setattr(cfg_compiler, "compile_grammar", fake_compile)
-    agent_routes.rate_limiter.clear()
     agent_routes.refine_rate_limiter.clear()
-    log = {"samples": [], "events": [], "dafDelayMs": 0, "fsfOctaveShift": 0}
-    refine = {"rawTokens": ["me", "water", "want"], "draft": "I want water.", "profileMode": "aphasia"}
+    refine = {"rawTokens": ["me", "water", "want"], "draft": "I want water."}
 
     _, _, free = make_user("free@example.com")
-    _, _, pro = make_user("pro@example.com", "pro")
-    assert client.post("/api/agent/generate-report", json=log, headers=free).status_code == 403
-    # ClearVoice and Aphasia Mode are free, and so is their second answer.
+    # ClearVoice is free, and so is its second answer.
     assert client.post("/api/agent/refine-sentence", json=refine, headers=free).status_code == 200
-    assert client.post("/api/agent/generate-report", json=log, headers=pro).status_code == 200
-
-    client.post("/api/agent/compile-grammar", json={"prompt": "reorder questions", "save": True}, headers=pro)
-    client.post("/api/agent/compile-grammar", json={"prompt": "reorder questions", "save": True})
-    assert saves == [False, True]
 
     monkeypatch.setattr(get_settings(), "REQUIRE_ACCOUNT", True)
-    assert client.post("/api/agent/generate-report", json=log).status_code == 401
-    assert client.post("/api/agent/compile-grammar", json={"prompt": "reorder questions"}).status_code == 401
     assert client.post("/api/agent/refine-sentence", json=refine).status_code == 401
 
 

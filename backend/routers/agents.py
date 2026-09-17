@@ -1,16 +1,12 @@
-"""The language-model agents' HTTP surface.
+"""The language-model agent's HTTP surface. There is one agent: the ClearVoice sentence refiner.
 
-- GET  /api/agent/status           which providers are configured (the website hides the widget otherwise)
-- POST /api/agent/chat             the onboarding assistant, with its tool calls listed in the answer
-- POST /api/agent/generate-report  session log -> ClinicalReport (Voicematics Pro: clinical_reports)
-- POST /api/agent/compile-grammar  plain-text request -> validated rules appended to grammars/user_custom.cfg
-                                   (signed in; only a local-mode install may save to that shared file)
-- POST /api/agent/refine-sentence  ClearVoice / Aphasia Mode words + the grammar engine's sentence + recent
-                                   sentences -> the context-aware rebuild shown under the rule-based one
+- GET  /api/agent/status           which providers are configured
+- POST /api/agent/refine-sentence  words + the grammar engine's sentence + recent sentences -> the
+                                   context-aware rebuild shown under the rule-based one
 
-The agents run on the thread pool (the model calls block) and answer 503 when no provider is configured.
-Requests are rate limited per client address because every call costs model tokens; sentence refinement has
-its own, larger allowance since the desktop app asks once per spoken sentence.
+The agent runs on the thread pool (the model calls block) and answers 503 when no provider is configured.
+Requests are rate limited per client address because every call costs model tokens; the allowance is sized for
+one call per spoken sentence.
 """
 
 import logging
@@ -20,13 +16,13 @@ from collections import OrderedDict, deque
 from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from pydantic_ai.exceptions import AgentRunError, UnexpectedModelBehavior
 
-from agents import assistant, cfg_compiler, sentence_refiner, telemetry_reporter
-from agents.llm import AgentUnavailable, agent_model, configured_providers, refine_model
+from agents import sentence_refiner
+from agents.llm import AgentUnavailable, configured_providers, refine_model
 from config import get_settings
-from ownership import CurrentAccount, plan_required, require_feature
+from ownership import CurrentAccount, plan_required
 
 router = APIRouter(prefix="/api/agent", tags=["agents"])
 log = logging.getLogger("agents")
@@ -36,11 +32,6 @@ class AgentStatus(BaseModel):
     available: bool
     providers: list[Literal["gemini", "groq"]]
     primary: Literal["gemini", "groq"] | None
-
-
-class CompileGrammarRequest(BaseModel):
-    prompt: str = Field(min_length=3, max_length=cfg_compiler.MAX_REQUEST_CHARS)
-    save: bool = True
 
 
 class RateLimiter:
@@ -75,34 +66,24 @@ class RateLimiter:
             self._hits.clear()
 
 
-rate_limiter = RateLimiter(get_settings().AGENT_RATE_LIMIT_PER_MINUTE)
 refine_rate_limiter = RateLimiter(get_settings().REFINE_RATE_LIMIT_PER_MINUTE)
 
 
-def check_rate(limiter: RateLimiter, request: Request) -> None:
+def refine_limited(request: Request) -> None:
     client = request.client.host if request.client else "unknown"
-    wait = limiter.retry_after(client)
+    wait = refine_rate_limiter.retry_after(client)
     if wait:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Too many agent requests. Try again shortly.",
+            detail="Too many sentences in a minute. Try again shortly.",
             headers={"Retry-After": str(wait)},
         )
 
 
-def limited(request: Request) -> None:
-    check_rate(rate_limiter, request)
-
-
-def refine_limited(request: Request) -> None:
-    check_rate(refine_rate_limiter, request)
-
-
-Limited = Annotated[None, Depends(limited)]
 RefineLimited = Annotated[None, Depends(refine_limited)]
 
 
-def require_model(select=agent_model):
+def require_model(select=refine_model):
     try:
         return select()
     except AgentUnavailable as error:
@@ -125,36 +106,10 @@ def agent_status() -> AgentStatus:
     return AgentStatus(available=bool(providers), providers=providers, primary=providers[0] if providers else None)
 
 
-@router.post("/chat", response_model=assistant.ChatResponse)
-def chat(payload: assistant.ChatRequest, _: Limited) -> assistant.ChatResponse:
-    model = require_model()
-    return run(assistant.chat, payload, model=model)
-
-
-@router.post("/generate-report", response_model=telemetry_reporter.ClinicalReport)
-def generate_report(
-    payload: telemetry_reporter.SessionLog, _: Limited, __: Annotated[None, require_feature("clinical_reports")]
-) -> telemetry_reporter.ClinicalReport:
-    model = require_model()
-    return run(telemetry_reporter.generate_report, payload, model=model)
-
-
-@router.post("/compile-grammar", response_model=cfg_compiler.CompiledGrammar)
-def compile_grammar(payload: CompileGrammarRequest, _: Limited, account: CurrentAccount) -> cfg_compiler.CompiledGrammar:
-    model = require_model()
-    # grammars/user_custom.cfg is one file for the whole server, so accounts on a hosted backend only get the
-    # validated rules back; the answer's `saved` says which happened.
-    save = payload.save and account.id is None
-    return run(cfg_compiler.compile_grammar, payload.prompt, model=model, save=save)
-
-
 @router.post("/refine-sentence", response_model=sentence_refiner.RefinedSentence)
-def refine_sentence(
-    payload: sentence_refiner.SentenceRefineRequest, _: RefineLimited, account: CurrentAccount
-) -> sentence_refiner.RefinedSentence:
-    # Both modes are on the free plan, so this mostly means "signed in" when accounts are required.
-    feature = "aphasia" if payload.profileMode == "aphasia" else "clearvoice"
-    if not account.has(feature):
-        raise plan_required(feature)
+def refine_sentence(payload: sentence_refiner.SentenceRefineRequest, _: RefineLimited, account: CurrentAccount) -> sentence_refiner.RefinedSentence:
+    # ClearVoice is on every plan, so this mostly means "signed in" when accounts are required.
+    if not account.has("clearvoice"):
+        raise plan_required("clearvoice")
     model = require_model(refine_model)
     return run(sentence_refiner.refine_sentence, payload, model=model)

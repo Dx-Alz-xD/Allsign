@@ -11,8 +11,8 @@ from pydantic_ai import models
 from pydantic_ai.messages import ModelResponse, RetryPromptPart, TextPart, ToolCallPart, ToolReturnPart
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 
-from agents import assistant, cfg_compiler, telemetry_reporter
-from agents.llm import AgentUnavailable, build_model, configured_providers
+from agents import assistant, cfg_compiler, sentence_refiner, telemetry_reporter
+from agents.llm import AgentUnavailable, build_model, configured_providers, refine_model
 from config import get_settings
 from routers import agents as agent_routes
 
@@ -22,8 +22,10 @@ models.ALLOW_MODEL_REQUESTS = False
 @pytest.fixture(autouse=True)
 def _fresh_rate_limit():
     agent_routes.rate_limiter.clear()
+    agent_routes.refine_rate_limiter.clear()
     yield
     agent_routes.rate_limiter.clear()
+    agent_routes.refine_rate_limiter.clear()
 
 
 def final(args: dict) -> ModelResponse:
@@ -66,6 +68,25 @@ def test_gemini_first_then_groq(monkeypatch):
         assert [type(m).__name__ for m in model.models] == ["GoogleModel", "GroqModel"]
     finally:
         get_settings.cache_clear()
+
+
+def test_refiner_tries_a_lighter_gemini_model_before_groq(monkeypatch):
+    monkeypatch.setenv("GEMINI_API_KEY", "gem-test")
+    monkeypatch.setenv("GROQ_API_KEY", "groq-test")
+    monkeypatch.setenv("GEMINI_MODEL", "gemini-flash-latest")
+    monkeypatch.setenv("GEMINI_REFINE_FALLBACK_MODEL", "gemini-flash-lite-latest")
+    get_settings.cache_clear()
+    refine_model.cache_clear()
+    try:
+        model = refine_model()
+        assert [(type(m).__name__, m.model_name) for m in model.models] == [
+            ("GoogleModel", "gemini-flash-latest"),
+            ("GoogleModel", "gemini-flash-lite-latest"),
+            ("GroqModel", "llama-3.3-70b-versatile"),
+        ]
+    finally:
+        get_settings.cache_clear()
+        refine_model.cache_clear()
 
 
 def test_single_provider_is_used_alone(monkeypatch):
@@ -371,3 +392,56 @@ def test_chat_rejects_bad_history(client, monkeypatch):
     response = client.post("/api/agent/chat", json={"messages": [{"role": "assistant", "content": "hi"}]})
     assert response.status_code == 422
     assert response.json()["detail"] == "The last message must be from the user."
+
+
+# ---------------------------------------------------------------------------
+# sentence_refiner.py
+
+
+def test_refiner_prompt_carries_the_words_the_rough_sentence_and_the_context():
+    request = sentence_refiner.SentenceRefineRequest(
+        rawTokens=["tevelision", "on"], draft="On tevelision.", profileMode="aphasia", context=["I am tired.", "I want to sit down."]
+    )
+    prompt = sentence_refiner.build_prompt(request)
+    assert "Mode: aphasia" in prompt
+    assert "<earlier>\n- I am tired.\n- I want to sit down.\n</earlier>" in prompt
+    assert "<words>\ntevelision on\n</words>" in prompt
+    assert "<rough>\nOn tevelision.\n</rough>" in prompt
+    assert "(nothing yet)" in sentence_refiner.build_prompt(request.model_copy(update={"context": []}))
+
+
+def test_refine_sentence_returns_the_models_sentence():
+    seen: list[str] = []
+
+    def scripted(messages, info: AgentInfo) -> ModelResponse:
+        seen.append(str(messages[-1].parts[-1].content))
+        return final({"sentence": "  Turn the   television on. "})
+
+    request = sentence_refiner.SentenceRefineRequest(rawTokens=["tevelision", "on"], draft="On tevelision.", profileMode="aphasia")
+    answer = sentence_refiner.refine_sentence(request, model=FunctionModel(scripted))
+    assert answer.text == "Turn the television on."
+    assert answer.modelName.startswith("function:")
+    assert "tevelision on" in seen[0]
+
+
+def test_refine_endpoint(client, monkeypatch):
+    monkeypatch.setattr(agent_routes, "require_model", lambda select=None: FunctionModel(lambda m, i: final({"sentence": "I want to go to the store."})))
+    body = {"rawTokens": "um i w-w-want to go the store".split(), "draft": "I want to go the store.", "context": ["Hi."]}
+    response = client.post("/api/agent/refine-sentence", json=body)
+    assert response.status_code == 200
+    assert response.json()["text"] == "I want to go to the store."
+
+    assert client.post("/api/agent/refine-sentence", json={**body, "profileMode": "fluency"}).status_code == 422
+    assert client.post("/api/agent/refine-sentence", json={**body, "rawTokens": []}).status_code == 422
+    too_long = [f"Sentence {n}." for n in range(sentence_refiner.MAX_CONTEXT_SENTENCES + 1)]
+    assert client.post("/api/agent/refine-sentence", json={**body, "context": too_long}).status_code == 422
+
+
+def test_refine_has_its_own_rate_limit(client, monkeypatch):
+    monkeypatch.setattr(agent_routes, "require_model", lambda select=None: FunctionModel(lambda m, i: final({"sentence": "Ok."})))
+    body = {"rawTokens": ["ok"], "draft": "Ok."}
+    for _ in range(agent_routes.rate_limiter.per_minute + 1):
+        assert client.post("/api/agent/refine-sentence", json=body).status_code == 200
+    for _ in range(agent_routes.refine_rate_limiter.per_minute - agent_routes.rate_limiter.per_minute - 1):
+        client.post("/api/agent/refine-sentence", json=body)
+    assert client.post("/api/agent/refine-sentence", json=body).status_code == 429

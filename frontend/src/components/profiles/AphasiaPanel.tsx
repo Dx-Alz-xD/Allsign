@@ -3,9 +3,8 @@
 import { useEffect, useId, useState } from 'react';
 import { Search } from 'lucide-react';
 import type { PhonemeLookupResponse } from '@shared/types';
-import { TokenInput } from '@/components/profiles/ClearVoicePanel';
+import { TokenInput, TwoAnswerReconstruction } from '@/components/profiles/ClearVoicePanel';
 import { useSession } from '@/components/providers/SessionProvider';
-import { TextReconstruction } from '@/components/ui/Reconstruction';
 import { inputStyles } from '@/components/modals/settings/controls';
 import { api, ApiError } from '@/lib/api/client';
 import { cn } from '@/lib/cn';
@@ -95,7 +94,6 @@ function WordFinder() {
 }
 
 export function AphasiaPanel() {
-  const { grammar, grammarSource, grammarRoundTripMs, astBudgetMs } = useSession();
   return (
     <div className="grid gap-4 lg:grid-cols-2">
       <section aria-label="Word finding" className="glass flex flex-col gap-4 rounded-2xl p-5">
@@ -105,7 +103,7 @@ export function AphasiaPanel() {
       <section aria-label="Sentence building" className="glass flex flex-col gap-5 rounded-2xl p-5">
         <h3 className="text-base font-semibold text-ink">Sentence building</h3>
         <TokenInput compact />
-        <TextReconstruction grammar={grammar} source={grammarSource} roundTripMs={grammarRoundTripMs} budgetMs={astBudgetMs} />
+        <TwoAnswerReconstruction />
       </section>
     </div>
   );

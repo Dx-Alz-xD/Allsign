@@ -336,10 +336,11 @@ def test_local_mode_keeps_every_feature(client: "TestClient"):
 
 
 def test_clinical_reports_are_pro_and_saved_grammar_is_local_only(client: "TestClient", monkeypatch):
-    from agents import cfg_compiler, telemetry_reporter
+    from agents import cfg_compiler, sentence_refiner, telemetry_reporter
     from routers import agents as agent_routes
 
-    monkeypatch.setattr(agent_routes, "require_model", lambda: object())
+    monkeypatch.setattr(agent_routes, "require_model", lambda *_: object())
+    monkeypatch.setattr(sentence_refiner, "refine_sentence", lambda request, model: {"text": "I want water.", "modelName": "test"})
     monkeypatch.setattr(telemetry_reporter, "generate_report", lambda log, model: {
         "session_duration_minutes": 1.0, "stuttering_reduction_index": 0.0, "vocal_fatigue_alert": False,
         "slp_summary_paragraph": "ok", "recommended_daf_delay_ms": 60,
@@ -352,11 +353,15 @@ def test_clinical_reports_are_pro_and_saved_grammar_is_local_only(client: "TestC
 
     monkeypatch.setattr(cfg_compiler, "compile_grammar", fake_compile)
     agent_routes.rate_limiter.clear()
+    agent_routes.refine_rate_limiter.clear()
     log = {"samples": [], "events": [], "dafDelayMs": 0, "fsfOctaveShift": 0}
+    refine = {"rawTokens": ["me", "water", "want"], "draft": "I want water.", "profileMode": "aphasia"}
 
     _, _, free = make_user("free@example.com")
     _, _, pro = make_user("pro@example.com", "pro")
     assert client.post("/api/agent/generate-report", json=log, headers=free).status_code == 403
+    # ClearVoice and Aphasia Mode are free, and so is their second answer.
+    assert client.post("/api/agent/refine-sentence", json=refine, headers=free).status_code == 200
     assert client.post("/api/agent/generate-report", json=log, headers=pro).status_code == 200
 
     client.post("/api/agent/compile-grammar", json={"prompt": "reorder questions", "save": True}, headers=pro)
@@ -366,6 +371,7 @@ def test_clinical_reports_are_pro_and_saved_grammar_is_local_only(client: "TestC
     monkeypatch.setattr(get_settings(), "REQUIRE_ACCOUNT", True)
     assert client.post("/api/agent/generate-report", json=log).status_code == 401
     assert client.post("/api/agent/compile-grammar", json={"prompt": "reorder questions"}).status_code == 401
+    assert client.post("/api/agent/refine-sentence", json=refine).status_code == 401
 
 
 # ---------------------------------------------------------------------------

@@ -492,6 +492,22 @@ export interface ClinicalReport {
   recommended_daf_delay_ms: number;
 }
 
+// POST /api/agent/refine-sentence (signed in when the backend requires accounts). The second, context-aware answer
+// for ClearVoice and Aphasia Mode, asked for after the grammar engine's sentence is already on screen.
+export type RefineProfile = 'clearvoice' | 'aphasia';
+
+export interface SentenceRefineRequest {
+  rawTokens: string[]; // 1 - 256 words as said, fillers and repeats included
+  draft: string; // the grammar engine's formattedText for those words
+  profileMode: RefineProfile;
+  context: string[]; // up to 6 earlier sentences, oldest first, 500 characters each
+}
+
+export interface RefinedSentence {
+  text: string;
+  modelName: string; // e.g. gemini-flash-latest; a lighter Gemini model or Groq when that one is busy
+}
+
 // POST /api/agent/compile-grammar (signed in when the backend requires accounts)
 export interface CompileGrammarRequest {
   prompt: string; // 3 - 1000 characters

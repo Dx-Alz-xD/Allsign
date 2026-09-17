@@ -2,9 +2,10 @@
 
 import { useMemo } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
-import { Timer } from 'lucide-react';
+import { ClipboardPaste, LoaderCircle, Sparkles, Timer, TriangleAlert } from 'lucide-react';
 import type { GrammarResponse } from '@shared/types';
-import type { GrammarSource } from '@/components/providers/SessionProvider';
+import { buttonStyles } from '@/components/modals/Modal';
+import type { GrammarSource, SentenceRefinement } from '@/components/providers/SessionProvider';
 import { DISFLUENCY_LABELS, classifyToken } from '@/lib/hud/disfluency';
 import { describeTag, parseBracketedTree, type SyntaxNode } from '@/lib/hud/syntaxTree';
 import { cn } from '@/lib/cn';
@@ -23,9 +24,88 @@ interface TextReconstructionProps {
   /** The grammar engine's parse budget; shows whether this parse met it. */
   budgetMs?: number;
   source?: GrammarSource | null;
+  /** Shows the grammar engine's sentence as the quick, lower-confidence answer with Gemini's answer under it. */
+  geminiAnswer?: boolean;
+  refinement?: SentenceRefinement | null;
+  /** Types Gemini's answer into the focused app; leave out where that is not possible. */
+  onTypeRefined?: (text: string) => void;
 }
 
-export function TextReconstruction({ grammar, roundTripMs = null, budgetMs, source = null }: TextReconstructionProps) {
+const sameSentence = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+function ConfidenceBadge({ level }: { level: 'lower' | 'higher' }) {
+  return (
+    <span
+      className={cn(
+        'rounded-full px-2.5 py-0.5 text-xs font-bold ring-1',
+        level === 'lower' ? 'bg-warn/10 text-warn ring-warn/30' : 'bg-neon-cyan/10 text-neon-cyan ring-neon-cyan/30',
+      )}
+    >
+      {level === 'lower' ? 'Lower confidence · grammar rules' : 'Higher confidence · Gemini'}
+    </span>
+  );
+}
+
+function GeminiAnswer({
+  refinement,
+  quickAnswer,
+  onType,
+}: {
+  refinement: SentenceRefinement | null;
+  quickAnswer: string;
+  onType?: (text: string) => void;
+}) {
+  if (!refinement) {
+    return <p className="text-sm text-mist">Gemini answers the next sentence you rebuild here.</p>;
+  }
+  if (refinement.status === 'pending') {
+    return (
+      <p className="flex items-center gap-2.5 rounded-xl border border-dashed border-neon-cyan/30 px-4 py-3 text-mist">
+        <LoaderCircle aria-hidden className="size-5 shrink-0 animate-spin text-neon-cyan motion-reduce:animate-none" />
+        Gemini is reading what was said in context&hellip;
+      </p>
+    );
+  }
+  if (refinement.status === 'failed') {
+    return (
+      <p className="flex items-start gap-2 rounded-xl border border-warn/40 px-4 py-3 text-sm text-warn">
+        <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
+        {refinement.message}
+      </p>
+    );
+  }
+  return (
+    <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }} className="flex flex-col gap-2.5">
+      <p className="rounded-xl border border-neon-cyan/40 bg-neon-cyan/[0.08] px-4 py-3 font-display text-2xl font-semibold leading-snug text-ink shadow-neon-soft sm:text-3xl">
+        {refinement.text}
+      </p>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-mist">
+        <span className="flex items-center gap-1.5">
+          <Sparkles aria-hidden className="size-4" />
+          Answered in <span className="tabular-nums">{(refinement.latencyMs / 1000).toFixed(1)} s</span>
+        </span>
+        <span>{refinement.modelName}</span>
+        {sameSentence(refinement.text, quickAnswer) && <span>Same as the quick answer</span>}
+        {onType && (
+          <button type="button" onClick={() => onType(refinement.text)} className={buttonStyles.secondary}>
+            <ClipboardPaste aria-hidden className="size-4" />
+            Type this answer
+          </button>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
+export function TextReconstruction({
+  grammar,
+  roundTripMs = null,
+  budgetMs,
+  source = null,
+  geminiAnswer = false,
+  refinement = null,
+  onTypeRefined,
+}: TextReconstructionProps) {
   if (!grammar) {
     return <p className="text-mist">Reconstructed sentences appear here as you speak.</p>;
   }
@@ -63,9 +143,23 @@ export function TextReconstruction({ grammar, roundTripMs = null, budgetMs, sour
         </div>
 
         <div className="flex flex-col gap-2.5">
-          <h3 className="text-base font-semibold text-ink">Reconstructed sentence</h3>
-          <p className="rounded-xl border border-neon-cyan/30 bg-neon-cyan/[0.06] px-4 py-3 font-display text-2xl font-semibold leading-snug text-ink sm:text-3xl">
-            {grammar.formattedText}
+          {geminiAnswer ? (
+            <h3 className="flex flex-wrap items-center gap-x-3 gap-y-1 text-base font-semibold text-ink">
+              Quick answer
+              <ConfidenceBadge level="lower" />
+            </h3>
+          ) : (
+            <h3 className="text-base font-semibold text-ink">Reconstructed sentence</h3>
+          )}
+          <p
+            className={cn(
+              'rounded-xl px-4 py-3 font-display font-semibold leading-snug text-ink',
+              geminiAnswer
+                ? 'bg-white/[0.04] text-xl ring-1 ring-white/10 sm:text-2xl'
+                : 'border border-neon-cyan/30 bg-neon-cyan/[0.06] text-2xl sm:text-3xl',
+            )}
+          >
+            {grammar.formattedText || '…'}
           </p>
           <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-mist">
             <span className="flex items-center gap-1.5">
@@ -81,6 +175,16 @@ export function TextReconstruction({ grammar, roundTripMs = null, budgetMs, sour
             {source && <span>{SOURCE_LABELS[source]}</span>}
           </p>
         </div>
+
+        {geminiAnswer && (
+          <div className="flex flex-col gap-2.5" aria-live="polite">
+            <h3 className="flex flex-wrap items-center gap-x-3 gap-y-1 text-base font-semibold text-ink">
+              Context-aware answer
+              <ConfidenceBadge level="higher" />
+            </h3>
+            <GeminiAnswer refinement={refinement} quickAnswer={grammar.formattedText} onType={onTypeRefined} />
+          </div>
+        )}
       </motion.div>
     </AnimatePresence>
   );

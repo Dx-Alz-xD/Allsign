@@ -15,7 +15,7 @@ const KEY_POINTS: readonly string[] = [
   'Voicematics is an assistive communication tool, not a medical device.',
   'It does not diagnose, treat, or monitor any health condition.',
   'The emergency alert does not contact emergency services.',
-  'Check reconstructed text, and any clinical report summary written by AI, before you share it.',
+  'Check reconstructed text, including second answers and clinical report summaries written by AI, before you share it.',
   'You have the right to use Voicematics in whatever way works for you, with any assistive technology.',
 ];
 
@@ -219,7 +219,8 @@ export function TermsOfServiceModal({ open, onClose, section }: TermsOfServiceMo
           </p>
           <p>
             Clinical reports compute their numbers from your measurements, and an AI model writes the summary paragraph. The
-            summary can be wrong. A report is not a diagnosis and does not replace a clinician&apos;s judgement.
+            summary can be wrong. A report is not a diagnosis and does not replace a clinician&apos;s judgement. The second
+            answer in ClearVoice and Aphasia Mode is also written by an AI model and can guess wrong about what you meant.
           </p>
         </Section>
 

@@ -14,9 +14,21 @@ import { tokenize } from '@/lib/speech/tokenSource';
  * the platform offers it); see lib/speech/tokenSource.ts for why.
  */
 export function TokenInput({ compact = false }: { compact?: boolean }) {
-  const { submitTokens, grammarBusy, grammarError, dictationAvailable, dictationActive, setDictationActive, interimTokens, backendOnline } = useSession();
+  const {
+    submitTokens,
+    grammarBusy,
+    grammarError,
+    dictationAvailable,
+    dictationActive,
+    setDictationActive,
+    interimTokens,
+    backendOnline,
+    geminiAnswer,
+    setGeminiAnswer,
+  } = useSession();
   const [text, setText] = useState('');
   const inputId = useId();
+  const geminiDescriptionId = useId();
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -68,6 +80,13 @@ export function TokenInput({ compact = false }: { compact?: boolean }) {
           </span>
         )}
       </div>
+      <div className="flex flex-col gap-1">
+        <Switch checked={geminiAnswer} onChange={setGeminiAnswer} label="Second answer from Gemini" describedBy={geminiDescriptionId} />
+        <p id={geminiDescriptionId} className="text-sm text-mist">
+          The grammar rules answer at once. With this on, the words (never audio) and your last few sentences also go to Google
+          Gemini, whose context-aware answer appears underneath.
+        </p>
+      </div>
       {interimTokens.length > 0 && (
         <p className="text-sm text-mist">
           Hearing: <span className="text-ink">{interimTokens.join(' ')}</span>
@@ -93,7 +112,7 @@ export function DirectPasteControls() {
       <Switch checked={directPasteActive} onChange={setDirectPasteActive} label="Direct paste" describedBy={describedBy} />
       <p id={describedBy} className="text-sm text-mist">
         {inDesktop
-          ? 'When on, every rebuilt sentence is typed into whichever app has keyboard focus.'
+          ? 'When on, every quick answer is typed into whichever app has keyboard focus.'
           : 'Direct paste needs the desktop app; in a browser the sentence stays here.'}
       </p>
       <div className="flex flex-wrap items-center gap-3">
@@ -112,13 +131,30 @@ export function DirectPasteControls() {
   );
 }
 
+/** The grammar engine's sentence with Gemini's context-aware answer under it, for ClearVoice and Aphasia Mode. */
+export function TwoAnswerReconstruction() {
+  const { grammar, grammarSource, grammarRoundTripMs, astBudgetMs, geminiAnswer, refinement, typeText } = useSession();
+  const inDesktop = typeof window !== 'undefined' && Boolean(window.omnivoice);
+  return (
+    <TextReconstruction
+      grammar={grammar}
+      source={grammarSource}
+      roundTripMs={grammarRoundTripMs}
+      budgetMs={astBudgetMs}
+      geminiAnswer={geminiAnswer}
+      refinement={refinement}
+      onTypeRefined={inDesktop ? (text) => void typeText(text) : undefined}
+    />
+  );
+}
+
 export function ClearVoicePanel() {
-  const { grammar, grammarSource, grammarRoundTripMs, astBudgetMs } = useSession();
+  const { grammar } = useSession();
   return (
     <div className="grid gap-4 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]">
       <section aria-label="Sentence reconstruction" className="glass flex flex-col gap-5 rounded-2xl p-5">
         <TokenInput />
-        <TextReconstruction grammar={grammar} source={grammarSource} roundTripMs={grammarRoundTripMs} budgetMs={astBudgetMs} />
+        <TwoAnswerReconstruction />
       </section>
       <div className="flex flex-col gap-4">
         <section aria-label="Direct paste" className="glass rounded-2xl p-5">

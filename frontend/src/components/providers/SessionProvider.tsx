@@ -15,6 +15,11 @@
  * translation then goes, in that same order, to the direct paste queue
  * (nut.js through the desktop bridge) and to the caregiver data channel's
  * broadcast queue.
+ *
+ * In ClearVoice and Aphasia Mode, once a translation is on screen, Gemini is
+ * asked for a context-aware second answer (POST /api/agent/refine-sentence)
+ * with the last few sentences. It is shown under the grammar engine's
+ * sentence and never delays or replaces it.
  */
 
 import {
@@ -34,6 +39,7 @@ import type {
   CaregiverTranscript,
   GrammarResponse,
   ProfileMode,
+  RefineProfile,
   SessionAnalytics,
   SessionLog,
   SpeechSource,
@@ -43,7 +49,7 @@ import { useSettings } from '@/components/providers/SettingsProvider';
 import { useAudioPipeline, type AudioPipeline } from '@/hooks/useAudioPipeline';
 import { makeAlert, performTriggerAction, typeIntoActiveApp, type ActionOutcome } from '@/lib/actions';
 import { SessionLogRecorder } from '@/lib/analytics/sessionLog';
-import { api, backendUrl, backendWebSocketUrl, getAuthToken } from '@/lib/api/client';
+import { api, ApiError, backendUrl, backendWebSocketUrl, getAuthToken } from '@/lib/api/client';
 import { getAudioEngine, type EngineSnapshot, type FluencySettings } from '@/lib/audio/engine';
 import { DEMO_TOKEN_SCRIPT, startSimulatedAudio, simulatedGrammarAt, simulatedPeerAt } from '@/lib/hud/simulated';
 import { createTelemetryStore } from '@/lib/hud/store';
@@ -67,6 +73,25 @@ const DEFAULT_AST_BUDGET_MS = 10;
 /** Pitch Mode replays one demo sentence through the real grammar engine this often. */
 const DEMO_SENTENCE_INTERVAL_MS = 8000;
 const CLIENT_ID_STORAGE_KEY = 'omnivoice:caregiver-client-id';
+/** Earlier sentences sent with each Gemini request, so it can follow the conversation. */
+const REFINE_CONTEXT_SENTENCES = 6;
+/** backend sentence_refiner.MAX_SENTENCE_CHARS */
+const REFINE_MAX_SENTENCE_CHARS = 500;
+
+/** The profiles that show a second, Gemini-written answer under the grammar engine's sentence. */
+function refineProfileOf(profile: ProfileMode): RefineProfile | null {
+  return profile === 'clearvoice' || profile === 'aphasia' ? profile : null;
+}
+
+function refinementFailure(cause: unknown): string {
+  if (cause instanceof ApiError) {
+    if (cause.status === 502) return 'Gemini did not give a usable answer this time.';
+    if (cause.status === 429) return 'Too many Gemini requests this minute; the next sentence will try again.';
+    return typeof cause.detail === 'string' && cause.detail ? cause.detail : `The Gemini answer failed (${cause.status}).`;
+  }
+  if (cause instanceof DOMException && cause.name === 'AbortError') return 'Gemini took too long to answer.';
+  return 'Could not reach the server for the Gemini answer.';
+}
 
 /** One id per browser tab, kept across reloads, so the relay lets a reloaded tab take its role back. */
 function tabClientId(): string {
@@ -82,6 +107,12 @@ function tabClientId(): string {
 }
 
 export type GrammarSource = SpeechSource | 'simulated';
+
+/** Gemini's answer for one grammar engine response, matched to it by identity. */
+export type SentenceRefinement =
+  | { status: 'pending'; grammar: GrammarResponse }
+  | { status: 'ready'; grammar: GrammarResponse; text: string; modelName: string; latencyMs: number }
+  | { status: 'failed'; grammar: GrammarResponse; message: string };
 
 export interface SessionContextValue {
   profile: ProfileMode;
@@ -111,6 +142,11 @@ export interface SessionContextValue {
   astBudgetMs: number;
   grammarError: string | null;
   grammarBusy: boolean;
+  /** Gemini's context-aware answer for the shown sentence; null when it was not asked for one. */
+  refinement: SentenceRefinement | null;
+  /** Whether ClearVoice and Aphasia Mode ask Gemini for that second answer (saved in settings). */
+  geminiAnswer: boolean;
+  setGeminiAnswer: (enabled: boolean) => void;
   interimTokens: string[];
   submitTokens: (tokens: string[]) => Promise<GrammarResponse | null>;
   tokenSourceKind: TokenSourceKind;
@@ -167,7 +203,7 @@ interface SessionProviderProps {
 const DEFAULT_FEEDBACK: FluencySettings = { dafDelayMs: 60, fsfOctaveShift: 0, feedbackGain: 1 };
 
 export function SessionProvider({ profile, muted, children }: SessionProviderProps) {
-  const { settings } = useSettings();
+  const { settings, updateSpeech } = useSettings();
   const account = useAccount();
   const analyticsRef = useRef(account.has('analytics'));
   analyticsRef.current = account.has('analytics');
@@ -190,6 +226,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
   const [astBudgetMs, setAstBudgetMs] = useState(DEFAULT_AST_BUDGET_MS);
   const [grammarError, setGrammarError] = useState<string | null>(null);
   const [grammarBusy, setGrammarBusy] = useState(false);
+  const [refinement, setRefinement] = useState<SentenceRefinement | null>(null);
   const [interimTokens, setInterimTokens] = useState<string[]>([]);
   const [tokenSourceKind, setTokenSourceKind] = useState<TokenSourceKind>('manual');
   const [dictationActive, setDictationActiveState] = useState(false);
@@ -216,6 +253,11 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
   directPasteRef.current = directPasteActive;
   const profileRef = useRef(profile);
   profileRef.current = profile;
+  const geminiAnswer = settings.speech.geminiAnswer;
+  const geminiAnswerRef = useRef(geminiAnswer);
+  geminiAnswerRef.current = geminiAnswer;
+  /** Recent sentences, oldest first: Gemini's answer where it gave one, otherwise the grammar engine's. */
+  const conversationRef = useRef<{ text: string }[]>([]);
 
   const pushAlert = useCallback((alert: CaregiverAlert) => {
     setAlerts((current) => [alert, ...current].slice(0, MAX_ALERTS));
@@ -336,6 +378,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
 
   const startNewSession = useCallback(() => {
     resetPipeline();
+    conversationRef.current = [];
     sessionLogRef.current.start(performance.now());
   }, [resetPipeline]);
 
@@ -466,6 +509,31 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
     [pasteQueue],
   );
 
+  const requestRefinement = useCallback((response: GrammarResponse, profileMode: RefineProfile) => {
+    const context = conversationRef.current.map((entry) => entry.text);
+    const entry = { text: response.formattedText.slice(0, REFINE_MAX_SENTENCE_CHARS) };
+    conversationRef.current = [...conversationRef.current, entry].slice(-REFINE_CONTEXT_SENTENCES);
+    setRefinement({ status: 'pending', grammar: response });
+    const started = performance.now();
+    // Only the answer for the newest sentence is shown; an older one arriving late just updates the context.
+    const settle = (next: SentenceRefinement) => setRefinement((current) => (current?.grammar === response ? next : current));
+    api.agent
+      .refineSentence({ rawTokens: response.originalTokens, draft: entry.text, profileMode, context })
+      .then((answer) => {
+        entry.text = answer.text.slice(0, REFINE_MAX_SENTENCE_CHARS);
+        settle({ status: 'ready', grammar: response, text: answer.text, modelName: answer.modelName, latencyMs: performance.now() - started });
+      })
+      .catch((cause: unknown) => settle({ status: 'failed', grammar: response, message: refinementFailure(cause) }));
+  }, []);
+
+  const setGeminiAnswer = useCallback(
+    (enabled: boolean) => {
+      updateSpeech({ geminiAnswer: enabled });
+      if (!enabled) setRefinement(null);
+    },
+    [updateSpeech],
+  );
+
   const settleSubmission = useCallback((requestId: string | null, response: GrammarResponse | null) => {
     if (!requestId) return;
     const resolve = pendingSubmissionsRef.current.get(requestId);
@@ -496,6 +564,12 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
           // Demo sentences are for the screen, never typed into someone's apps.
           if (utterance.source !== 'demo' && directPasteRef.current && response.formattedText) {
             pasteQueue.enqueue(response.formattedText);
+          }
+          const refineProfile = refineProfileOf(profileRef.current);
+          if (utterance.source !== 'demo' && refineProfile && geminiAnswerRef.current && response.originalTokens.length > 0) {
+            requestRefinement(response, refineProfile);
+          } else {
+            setRefinement(null);
           }
           const transcript: CaregiverTranscript = {
             id: `${utterance.openedAt}-${utterance.id}-${utterance.part}`,
@@ -528,7 +602,7 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
           return;
       }
     },
-    [broadcastToCaregiver, pasteQueue, settleSubmission],
+    [broadcastToCaregiver, pasteQueue, requestRefinement, settleSubmission],
   );
 
   const speechHandlerRef = useRef(handleSpeechMessage);
@@ -729,6 +803,9 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       astBudgetMs,
       grammarError,
       grammarBusy,
+      refinement: refinement && refinement.grammar === shownGrammar ? refinement : null,
+      geminiAnswer,
+      setGeminiAnswer,
       interimTokens,
       submitTokens,
       tokenSourceKind,
@@ -777,6 +854,9 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       astBudgetMs,
       grammarError,
       grammarBusy,
+      refinement,
+      geminiAnswer,
+      setGeminiAnswer,
       interimTokens,
       submitTokens,
       tokenSourceKind,

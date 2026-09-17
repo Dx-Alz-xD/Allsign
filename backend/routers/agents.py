@@ -5,9 +5,12 @@
 - POST /api/agent/generate-report  session log -> ClinicalReport (Voicematics Pro: clinical_reports)
 - POST /api/agent/compile-grammar  plain-text request -> validated rules appended to grammars/user_custom.cfg
                                    (signed in; only a local-mode install may save to that shared file)
+- POST /api/agent/refine-sentence  ClearVoice / Aphasia Mode words + the grammar engine's sentence + recent
+                                   sentences -> the context-aware rebuild shown under the rule-based one
 
-All three agents run on the thread pool (the model calls block) and answer 503 when no provider is
-configured. Requests are rate limited per client address because every call costs model tokens.
+The agents run on the thread pool (the model calls block) and answer 503 when no provider is configured.
+Requests are rate limited per client address because every call costs model tokens; sentence refinement has
+its own, larger allowance since the desktop app asks once per spoken sentence.
 """
 
 import logging
@@ -20,10 +23,10 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 from pydantic_ai.exceptions import AgentRunError, UnexpectedModelBehavior
 
-from agents import assistant, cfg_compiler, telemetry_reporter
-from agents.llm import AgentUnavailable, agent_model, configured_providers
+from agents import assistant, cfg_compiler, sentence_refiner, telemetry_reporter
+from agents.llm import AgentUnavailable, agent_model, configured_providers, refine_model
 from config import get_settings
-from ownership import CurrentAccount, require_feature
+from ownership import CurrentAccount, plan_required, require_feature
 
 router = APIRouter(prefix="/api/agent", tags=["agents"])
 log = logging.getLogger("agents")
@@ -73,11 +76,12 @@ class RateLimiter:
 
 
 rate_limiter = RateLimiter(get_settings().AGENT_RATE_LIMIT_PER_MINUTE)
+refine_rate_limiter = RateLimiter(get_settings().REFINE_RATE_LIMIT_PER_MINUTE)
 
 
-def limited(request: Request) -> None:
+def check_rate(limiter: RateLimiter, request: Request) -> None:
     client = request.client.host if request.client else "unknown"
-    wait = rate_limiter.retry_after(client)
+    wait = limiter.retry_after(client)
     if wait:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -86,12 +90,21 @@ def limited(request: Request) -> None:
         )
 
 
+def limited(request: Request) -> None:
+    check_rate(rate_limiter, request)
+
+
+def refine_limited(request: Request) -> None:
+    check_rate(refine_rate_limiter, request)
+
+
 Limited = Annotated[None, Depends(limited)]
+RefineLimited = Annotated[None, Depends(refine_limited)]
 
 
-def require_model():
+def require_model(select=agent_model):
     try:
-        return agent_model()
+        return select()
     except AgentUnavailable as error:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(error)) from None
 
@@ -133,3 +146,15 @@ def compile_grammar(payload: CompileGrammarRequest, _: Limited, account: Current
     # validated rules back; the answer's `saved` says which happened.
     save = payload.save and account.id is None
     return run(cfg_compiler.compile_grammar, payload.prompt, model=model, save=save)
+
+
+@router.post("/refine-sentence", response_model=sentence_refiner.RefinedSentence)
+def refine_sentence(
+    payload: sentence_refiner.SentenceRefineRequest, _: RefineLimited, account: CurrentAccount
+) -> sentence_refiner.RefinedSentence:
+    # Both modes are on the free plan, so this mostly means "signed in" when accounts are required.
+    feature = "aphasia" if payload.profileMode == "aphasia" else "clearvoice"
+    if not account.has(feature):
+        raise plan_required(feature)
+    model = require_model(refine_model)
+    return run(sentence_refiner.refine_sentence, payload, model=model)

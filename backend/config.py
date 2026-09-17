@@ -34,16 +34,20 @@ class Settings(BaseSettings):
     AUTH_JWT_SECRET: SecretStr = SecretStr("")
     AUTH_TOKEN_TTL_MINUTES: int = 12 * 60
 
-    # Language-model agents (agents/): the website assistant, the grammar-rule compiler and the clinical
-    # report writer. None of them is in the speech path (CLAUDE.md section 7). Gemini is tried first and
+    # Language-model agents (agents/): the website assistant, the grammar-rule compiler, the clinical report
+    # writer and the ClearVoice / Aphasia sentence refiner. None of them blocks the speech path (CLAUDE.md section 7). Gemini is tried first and
     # Groq takes over when a Gemini call fails; with both keys empty the /api/agent endpoints answer 503.
     GEMINI_API_KEY: SecretStr = SecretStr("")
     GEMINI_MODEL: str = "gemini-flash-latest"
+    # Tried after GEMINI_MODEL by the sentence refiner only, when that model is overloaded; empty to skip.
+    GEMINI_REFINE_FALLBACK_MODEL: str = "gemini-flash-lite-latest"
     GROQ_API_KEY: SecretStr = SecretStr("")
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     AGENT_TIMEOUT_SECONDS: float = 60.0
     # Requests per minute per client address across the /api/agent endpoints.
     AGENT_RATE_LIMIT_PER_MINUTE: int = 20
+    # Separate allowance for /api/agent/refine-sentence, which the desktop app calls once per spoken sentence.
+    REFINE_RATE_LIMIT_PER_MINUTE: int = 60
     # Where the grammar compiler saves validated rules; relative paths resolve against backend/.
     CUSTOM_GRAMMAR_PATH: str = "./grammars/user_custom.cfg"
     # Where the website sends people for the desktop installer (electron-builder publishes there).

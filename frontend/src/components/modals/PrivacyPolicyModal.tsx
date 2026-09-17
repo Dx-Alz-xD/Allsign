@@ -28,7 +28,7 @@ const COMMITMENTS: ReadonlyArray<{ icon: LucideIcon; title: string; body: string
   {
     icon: Cpu,
     title: 'Your voice is analyzed on this computer',
-    body: 'Pitch, strain, and fluency are measured on your computer as you speak. Audio is never recorded or uploaded, and grammar rules, not AI models, rebuild your sentences.',
+    body: 'Pitch, strain, and fluency are measured on your computer as you speak. Audio is never recorded or uploaded, and grammar rules rebuild your sentences.',
   },
   {
     icon: UserRound,
@@ -37,8 +37,8 @@ const COMMITMENTS: ReadonlyArray<{ icon: LucideIcon; title: string; body: string
   },
   {
     icon: Sparkles,
-    title: 'AI only when you ask for it',
-    body: 'Clinical reports and the website assistant send what you give them to Google Gemini or Groq. Nothing you say while using the app goes to an AI model.',
+    title: 'AI only where you can see it',
+    body: 'Clinical reports, the website assistant, and the second answer in ClearVoice and Aphasia Mode send text to Google Gemini or Groq. Audio never does, and the second answer can be switched off.',
   },
   {
     icon: EyeOff,
@@ -70,6 +70,7 @@ function isLoopbackHost(hostname: string): boolean {
 function useDeviceChecks(): DeviceCheck[] {
   const { settings } = useSettings();
   const { stunUrls, turnUrl } = settings.network;
+  const { geminiAnswer } = settings.speech;
 
   return useMemo(() => {
     const checks: DeviceCheck[] = [
@@ -127,6 +128,15 @@ function useDeviceChecks(): DeviceCheck[] {
     });
 
     checks.push({
+      label: 'Second answer in ClearVoice and Aphasia Mode',
+      value: geminiAnswer ? 'On' : 'Off',
+      detail: geminiAnswer
+        ? 'Each rebuilt sentence’s words (never audio) and your last few sentences go to the Voicematics server, which asks Google Gemini, or Groq if Gemini fails, for a context-aware answer. Answers are not saved on the server. Switch it off next to the text box.'
+        : 'Rebuilt sentences come from grammar rules only; nothing you say goes to an AI model.',
+      tone: geminiAnswer ? 'leaves-device' : 'local',
+    });
+
+    checks.push({
       label: 'Clinical reports',
       value: 'Only when you ask for one',
       detail:
@@ -143,7 +153,7 @@ function useDeviceChecks(): DeviceCheck[] {
     });
 
     return checks;
-  }, [stunUrls, turnUrl]);
+  }, [geminiAnswer, stunUrls, turnUrl]);
 }
 
 function Section({ id, title, children }: { id: string; title: string; children: ReactNode }) {
@@ -379,6 +389,10 @@ export function PrivacyPolicyModal({ open, onClose }: { open: boolean; onClose: 
             </li>
             <li>Recognized words go to the Voicematics server to be rebuilt into sentences.</li>
             <li>
+              The second answer in ClearVoice and Aphasia Mode is on. Each sentence&apos;s words and your last few sentences
+              go to the Voicematics server and on to Google Gemini or Groq, whose own privacy terms apply to that request.
+            </li>
+            <li>
               You connect a caregiver. Shared alerts, readings, and rebuilt sentences travel encrypted between the two
               devices, through a relay only if a direct connection fails. The Voicematics server sets up the connection and
               sees the room code and IP addresses, never the shared data.
@@ -402,7 +416,7 @@ export function PrivacyPolicyModal({ open, onClose }: { open: boolean; onClose: 
             <strong>HIPAA.</strong> Voicematics stores account data on its server and is not offered as a HIPAA-covered
             service. If a clinic uses Voicematics with patients, the clinic remains responsible for its own HIPAA
             obligations, including deciding whether session data may be saved to Voicematics accounts and whether clinical
-            reports may be written with a third-party AI provider.
+            reports and second answers may be written with a third-party AI provider.
           </p>
           <p>
             <strong>GDPR.</strong> Voicematics collects only what the features you use need, keeps it with your account,

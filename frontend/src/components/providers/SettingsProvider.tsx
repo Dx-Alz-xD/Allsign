@@ -9,6 +9,7 @@ import {
   type DisplaySettings,
   type LegalSettings,
   type NetworkSettings,
+  type SpeechSettings,
 } from '@/lib/settings/schema';
 import { clearStoredData, loadSettings, saveSettings } from '@/lib/settings/storage';
 
@@ -22,6 +23,7 @@ interface SettingsContextValue {
   updateDisplay: (patch: Partial<DisplaySettings>) => void;
   updateAudio: (patch: Partial<AudioSettings>) => void;
   updateNetwork: (patch: Partial<NetworkSettings>) => void;
+  updateSpeech: (patch: Partial<SpeechSettings>) => void;
   updateLegal: (patch: Partial<LegalSettings>) => void;
   /** Removes everything Voicematics stored in this browser profile and returns to defaults. */
   eraseLocalData: () => string[];
@@ -89,6 +91,10 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
     (patch: Partial<NetworkSettings>) => setSettings((current) => ({ ...current, network: { ...current.network, ...patch } })),
     [],
   );
+  const updateSpeech = useCallback(
+    (patch: Partial<SpeechSettings>) => setSettings((current) => ({ ...current, speech: { ...current.speech, ...patch } })),
+    [],
+  );
   const updateLegal = useCallback(
     (patch: Partial<LegalSettings>) => setSettings((current) => ({ ...current, legal: { ...current.legal, ...patch } })),
     [],
@@ -110,10 +116,11 @@ export function SettingsProvider({ children }: { children: ReactNode }) {
       updateDisplay,
       updateAudio,
       updateNetwork,
+      updateSpeech,
       updateLegal,
       eraseLocalData,
     }),
-    [settings, ready, highContrast, systemHighContrast, updateDisplay, updateAudio, updateNetwork, updateLegal, eraseLocalData],
+    [settings, ready, highContrast, systemHighContrast, updateDisplay, updateAudio, updateNetwork, updateSpeech, updateLegal, eraseLocalData],
   );
 
   return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;

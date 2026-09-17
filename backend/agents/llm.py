@@ -40,12 +40,15 @@ def _any_failure(exc: Exception) -> bool:
     return True
 
 
-def build_model() -> Model:
+def build_model(gemini_fallbacks: tuple[str, ...] = ()) -> Model:
+    """gemini_fallbacks: more Gemini models to try, in order, before Groq."""
     settings = get_settings()
     models: list[Model] = []
     if settings.GEMINI_API_KEY.get_secret_value():
         provider = GoogleProvider(api_key=settings.GEMINI_API_KEY.get_secret_value())
-        models.append(GoogleModel(settings.GEMINI_MODEL, provider=provider))
+        for name in dict.fromkeys((settings.GEMINI_MODEL, *gemini_fallbacks)):
+            if name:
+                models.append(GoogleModel(name, provider=provider))
     if settings.GROQ_API_KEY.get_secret_value():
         provider = GroqProvider(api_key=settings.GROQ_API_KEY.get_secret_value())
         models.append(GroqModel(settings.GROQ_MODEL, provider=provider))
@@ -59,3 +62,10 @@ def build_model() -> Model:
 @lru_cache(maxsize=1)
 def agent_model() -> Model:
     return build_model()
+
+
+@lru_cache(maxsize=1)
+def refine_model() -> Model:
+    """The sentence refiner runs once per spoken sentence, so a busy Gemini model falls back to a lighter one
+    before Groq (GEMINI_REFINE_FALLBACK_MODEL)."""
+    return build_model((get_settings().GEMINI_REFINE_FALLBACK_MODEL,))

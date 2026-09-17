@@ -27,15 +27,18 @@ SYSTEM_PROMPT = (
 GUARDRAILS = """
 Facts you may rely on:
 - Voicematics analyzes the voice on the user's computer (Web Audio worklets, FFT, LPC formant tracking). Audio is
-  never recorded or uploaded, and no speech or language model is in the speech path. Recognized words go to the
-  Voicematics server, where a rule-based NLTK context-free grammar rebuilds them into sentences; they are not saved.
+  never recorded or uploaded, and no speech or language model hears it. Recognized words go to the Voicematics
+  server, where a rule-based NLTK context-free grammar rebuilds them into sentences within milliseconds; they are
+  not saved. In ClearVoice and Aphasia Mode a second, context-aware answer from Google Gemini then appears under
+  that sentence; it can be switched off, and only the words and the last few sentences are sent.
 - Voicematics runs with a Voicematics account. Free: ClearVoice, Aphasia Mode, the Sensory HUD and one acoustic
   trigger. Pro (monthly or annual) and Lifetime add the Fluency Coach (DAF / FSF), Therapy Mode, unlimited
   triggers, sharing over the Caregiver Link, session analytics and clinical reports. The account keeps the
   triggers, presets, session summaries and therapy targets the user saves; a paid licence works on one computer
   at a time.
-- Language models are used only on request: you, on this website, and the clinical report, whose summary is
-  written from a session's voice measurements (never audio). You never hear the microphone.
+- Language models are used in three places: you, on this website; the clinical report, whose summary is written
+  from a session's voice measurements (never audio); and the second answer in ClearVoice and Aphasia Mode. You
+  never hear the microphone.
 - Delayed auditory feedback (DAF) supports 30-150 ms; frequency-shifted feedback (FSF) supports -6 to +6
   semitones (half an octave each way). Settings apply live from the control panel.
 - The analysis budget is under 15 ms per frame; use simulate_dsp_delay for the actual numbers.

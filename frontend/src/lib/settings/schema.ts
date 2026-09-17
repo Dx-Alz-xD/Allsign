@@ -33,6 +33,11 @@ export interface NetworkSettings {
   turnCredential: string;
 }
 
+export interface SpeechSettings {
+  /** ClearVoice and Aphasia Mode also ask Gemini for a context-aware second answer. */
+  geminiAnswer: boolean;
+}
+
 export interface LegalSettings {
   termsVersion: string | null;
   termsAcknowledgedAt: string | null;
@@ -43,6 +48,7 @@ export interface AppSettings {
   display: DisplaySettings;
   audio: AudioSettings;
   network: NetworkSettings;
+  speech: SpeechSettings;
   legal: LegalSettings;
 }
 
@@ -69,6 +75,7 @@ export function defaultSettings(): AppSettings {
       outputLabel: '',
     },
     network: defaultNetworkSettings(),
+    speech: { geminiAnswer: true },
     legal: { termsVersion: null, termsAcknowledgedAt: null },
   };
 }
@@ -90,6 +97,7 @@ export function parseSettings(input: unknown): AppSettings {
   const display = isRecord(input.display) ? input.display : {};
   const audio = isRecord(input.audio) ? input.audio : {};
   const network = isRecord(input.network) ? input.network : {};
+  const speech = isRecord(input.speech) ? input.speech : {};
   const legal = isRecord(input.legal) ? input.legal : {};
 
   return {
@@ -111,6 +119,9 @@ export function parseSettings(input: unknown): AppSettings {
       turnUrl: stringOr(network.turnUrl, ''),
       turnUsername: stringOr(network.turnUsername, ''),
       turnCredential: stringOr(network.turnCredential, ''),
+    },
+    speech: {
+      geminiAnswer: typeof speech.geminiAnswer === 'boolean' ? speech.geminiAnswer : fallback.speech.geminiAnswer,
     },
     legal: {
       termsVersion: typeof legal.termsVersion === 'string' ? legal.termsVersion : null,

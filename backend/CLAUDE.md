@@ -4,7 +4,7 @@
 - **Product:** Voicematics — All-in-One Assistive Speech & Acoustic Platform, sold as a service: desktop app (`/frontend`), website (`/website`), backend (`/backend`). "OmniVoice OS" was the desktop app's codename and only survives in internal identifiers (`app://omnivoice`, `window.omnivoice`, `omnivoice.db`, `omnivoice:` storage keys); never show it to users.
 - **Performance Target:** Sub-15ms deterministic processing latency.
 - **Strict Compliance Guardrails:** 
-  - ZERO Generative AI, Predictive AI, or Computer Vision model calls.
+  - ZERO Generative AI, Predictive AI, or Computer Vision model calls in the speech path (section 7 lists the agents beside it).
   - 100% Web Audio API / Worklets (DSP), Linear Predictive Coding (LPC), Fast-Fourier Transforms (FFT), and rule-based NLTK Context-Free Grammar (CFG) AST parsing.
   - Native OS Automation via `@nut-tree-fork/nut-js`.
 - **Multi-Laptop Topology:**
@@ -99,6 +99,7 @@ venv/Scripts/python.exe scripts/evaluate_benchmarks.py  # regenerate EVALUATION_
 | `POST /api/agent/chat` | `ChatRequest` -> `ChatResponse` | website `AgentAssistant.tsx` |
 | `POST /api/agent/generate-report` | `SessionLog` -> `ClinicalReport` (Pro: `clinical_reports`) | desktop AnalyticsView |
 | `POST /api/agent/compile-grammar` | `CompileGrammarRequest` -> `CompiledGrammar` (account; only local mode saves) | grammar authoring (no UI yet) |
+| `POST /api/agent/refine-sentence` | `SentenceRefineRequest` -> `RefinedSentence` (account; `clearvoice` / `aphasia`) | ClearVoice and Aphasia second answer (SessionProvider) |
 
 - Change a contract in both files in the same commit; the desktop client is `frontend/src/lib/api/client.ts`, the website client is `website/src/lib/api.ts`.
 - `frontend/src/workers/trigger.worker.ts` ports `acoustic_matcher.py`; `tests/test_acoustic_matcher.py` and `src/workers/__tests__/dsp.test.ts` pin the same reference values.
@@ -106,10 +107,11 @@ venv/Scripts/python.exe scripts/evaluate_benchmarks.py  # regenerate EVALUATION_
 ---
 
 ## 7. Language-Model Agents (`/backend/agents`) and the Voicematics Website (`/website`)
-The no-model rule in section 1 is about the speech path: capture, DSP workers, worklets, the grammar engine, trigger matching and everything the desktop app does while someone speaks. Three agents run **beside** that path, never in it, and nothing they produce is consumed live:
+The no-model rule in section 1 is about the speech path: capture, DSP workers, worklets, the grammar engine, trigger matching and everything the desktop app does while someone speaks. Four agents run **beside** that path, never in it:
 - `agents/assistant.py`: the website's onboarding chat (`AgentAssistant.tsx`). Two deterministic tools, `simulate_dsp_delay` and `recommend_settings`; the model never hears audio.
 - `agents/cfg_compiler.py`: plain-text correction request -> NLTK CFG rules, validated with `nltk.CFG.fromstring()` and against `grammar_engine.GRAMMAR_RULES` before they are appended to `grammars/user_custom.cfg` (+ `.transforms.json`). Loading those rules into the engine is a separate, deterministic step that does not exist yet.
 - `agents/telemetry_reporter.py`: session log -> `ClinicalReport`. Every number is computed in Python; the model writes only `slp_summary_paragraph`.
+- `agents/sentence_refiner.py`: ClearVoice / Aphasia Mode words + the grammar engine's sentence + up to 6 earlier sentences -> a context-aware rebuild. SessionProvider asks for it after the grammar engine's sentence is on screen and shows it underneath as the higher-confidence answer; it never delays the grammar engine's sentence, direct paste types only the grammar engine's sentence, and a "Type this answer" button types Gemini's. Switched by `settings.speech.geminiAnswer` (default on); its own rate limit (`REFINE_RATE_LIMIT_PER_MINUTE`) and a lighter Gemini model before Groq (`GEMINI_REFINE_FALLBACK_MODEL`).
 
 Rules:
 - Provider order is Gemini, then Groq on any Gemini failure (`agents/llm.py`, pydantic-ai `FallbackModel`). Keys: `GEMINI_API_KEY`, `GROQ_API_KEY` in `backend/.env`; with neither set the `/api/agent` endpoints answer 503 and the website widget shows "Offline".

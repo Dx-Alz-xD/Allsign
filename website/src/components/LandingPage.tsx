@@ -8,6 +8,7 @@ import { CheckoutModal } from '@/components/CheckoutModal';
 import { DashboardOverlay } from '@/components/DashboardOverlay';
 import { DownloadSimulation } from '@/components/DownloadSimulation';
 import { Features } from '@/components/Features';
+import { ForCaregivers } from '@/components/ForCaregivers';
 import { Header } from '@/components/Header';
 import { Hero } from '@/components/Hero';
 import { Pipeline } from '@/components/Pipeline';
@@ -34,6 +35,7 @@ function Page() {
         <Pipeline />
         <Features />
         <TechSimulator />
+        <ForCaregivers />
         <Pricing onSubscribe={setCheckoutPlan} onCreateAccount={() => setAuthMode('signup')} onOpenDashboard={() => setDashboardOpen(true)} />
       </main>
       <footer className="border-t border-white/[0.06] px-6 py-10 text-center text-xs text-smoke">

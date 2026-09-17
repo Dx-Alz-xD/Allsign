@@ -1,28 +1,45 @@
-// Copies the shared contract into the website so it builds on its own (Vercel uploads only this folder).
-// Run before dev/build; `--check` fails when the copy is stale. shared/types.ts stays the source of truth.
-import { copyFileSync, existsSync, readFileSync } from 'node:fs';
+// Copies the code the website shares with the desktop app, so the website builds on its own (Vercel uploads
+// only this folder). shared/types.ts and the desktop app's peer-link code stay the source of truth; run
+// before dev/build, `--check` fails when a copy is stale.
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
-const source = resolve(here, '../../shared/types.ts');
-const target = resolve(here, '../src/shared/types.ts');
+const repo = resolve(here, '../..');
+const site = resolve(here, '..');
 const check = process.argv.includes('--check');
 
-if (!existsSync(source)) {
-  // A checkout without the rest of the repository (a hosted build): use the committed copy.
-  if (!existsSync(target)) {
-    console.error('sync-shared: neither ../shared/types.ts nor src/shared/types.ts exists');
-    process.exit(1);
+// [source in the repository, copy inside the website]. The copies keep their `@/lib/...` and `@shared/...`
+// imports, which the website's tsconfig resolves to the same places.
+const FILES = [
+  ['shared/types.ts', 'src/shared/types.ts'],
+  ['frontend/src/lib/hud/types.ts', 'src/lib/hud/types.ts'],
+  ['frontend/src/lib/peer/messages.ts', 'src/lib/peer/messages.ts'],
+  ['frontend/src/lib/peer/outbox.ts', 'src/lib/peer/outbox.ts'],
+  ['frontend/src/lib/peer/caregiverLink.ts', 'src/lib/peer/caregiverLink.ts'],
+];
+
+let stale = 0;
+for (const [from, to] of FILES) {
+  const source = resolve(repo, from);
+  const target = resolve(site, to);
+  if (!existsSync(source)) {
+    // A checkout without the rest of the repository (a hosted build): the committed copy is used.
+    if (!existsSync(target)) {
+      console.error(`sync-shared: neither ${from} nor ${to} exists`);
+      process.exit(1);
+    }
+    continue;
   }
-  process.exit(0);
-}
-if (check) {
-  const same = existsSync(target) && readFileSync(source, 'utf8') === readFileSync(target, 'utf8');
-  if (!same) {
-    console.error('sync-shared: src/shared/types.ts is stale; run `npm run shared:sync`');
-    process.exit(1);
+  if (check) {
+    if (!existsSync(target) || readFileSync(source, 'utf8') !== readFileSync(target, 'utf8')) {
+      console.error(`sync-shared: ${to} is stale; run \`npm run shared:sync\``);
+      stale++;
+    }
+    continue;
   }
-  process.exit(0);
+  mkdirSync(dirname(target), { recursive: true });
+  copyFileSync(source, target);
 }
-copyFileSync(source, target);
+if (stale) process.exit(1);

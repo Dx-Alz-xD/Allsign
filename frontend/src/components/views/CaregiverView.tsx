@@ -11,6 +11,7 @@ import { useSession } from '@/components/providers/SessionProvider';
 import { PitchModeDashboard } from '@/components/PitchModeDashboard';
 import { TelemetryBar } from '@/components/TelemetryBar';
 import { generateRoomCode } from '@/lib/peer/caregiverLink';
+import { websiteUrl } from '@/lib/account/plans';
 import { cn } from '@/lib/cn';
 
 const STATUS_TEXT = {
@@ -132,6 +133,18 @@ export function CaregiverView() {
 
       {role === 'speaker' && canShare && (
         <section aria-label="Sharing" className="space-y-4">
+          <p className="glass flex flex-wrap items-center gap-2 rounded-2xl px-4 py-3 text-sm text-mist">
+            <span>Your caregiver needs no app: send them this link and they can watch from any browser.</span>
+            <code className="rounded bg-black/30 px-2 py-1 text-ink">{websiteUrl(`caregiver?room=${encodeURIComponent(room)}`)}</code>
+            <button
+              type="button"
+              onClick={() => void navigator.clipboard?.writeText(websiteUrl(`caregiver?room=${encodeURIComponent(room)}`))}
+              className={cn(buttonStyles.secondary, 'h-9 px-3 text-sm')}
+            >
+              <Copy aria-hidden className="size-4" />
+              Copy link
+            </button>
+          </p>
           <TelemetryBar source={telemetry} peer={peer} />
           <div className="flex flex-wrap items-center gap-3">
             <button type="button" onClick={() => setEmergencyNote(EMERGENCY_NOTES[sendEmergency() ?? 'none'])} className={buttonStyles.danger}>

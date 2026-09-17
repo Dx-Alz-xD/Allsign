@@ -25,6 +25,23 @@ export function backendUrl(): string {
   return (configured || DEFAULT_BACKEND_URL).replace(/\/+$/, '');
 }
 
+/** ws(s):// origin of the backend, for the caregiver signalling relay. */
+export function backendWebSocketUrl(): string {
+  return backendUrl().replace(/^http/, 'ws');
+}
+
+/** STUN/TURN servers for the caregiver link, from NEXT_PUBLIC_STUN_SERVER and NEXT_PUBLIC_TURN_*. */
+export function iceServers(): RTCIceServer[] {
+  const stun = (process.env.NEXT_PUBLIC_STUN_SERVER || 'stun:stun.l.google.com:19302')
+    .split(',')
+    .map((url) => url.trim())
+    .filter(Boolean);
+  const servers: RTCIceServer[] = stun.length ? [{ urls: stun }] : [];
+  const turn = process.env.NEXT_PUBLIC_TURN_URL?.trim();
+  if (turn) servers.push({ urls: turn, username: process.env.NEXT_PUBLIC_TURN_USERNAME, credential: process.env.NEXT_PUBLIC_TURN_CREDENTIAL });
+  return servers;
+}
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,

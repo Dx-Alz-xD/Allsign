@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     # Where the grammar compiler saves validated rules; relative paths resolve against backend/.
     CUSTOM_GRAMMAR_PATH: str = "./grammars/user_custom.cfg"
     # Where the website sends people for the desktop installer (electron-builder publishes there).
-    INSTALLER_DOWNLOAD_URL: str = "https://github.com/Dx-Alz-xD/Allsign/releases/latest/download/Voicematics-Setup.exe"
+    INSTALLER_DOWNLOAD_URL: str = "https://github.com/Dx-Alz-xD/Voicematics/releases/latest/download/Voicematics-Setup.exe"
 
 
 @lru_cache

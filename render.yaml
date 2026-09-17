@@ -1,0 +1,49 @@
+# Render blueprint: the API as a Docker web service with a persistent disk for the SQLite databases.
+# In the Render dashboard: New > Blueprint > pick this repository. It reads this file and asks for the
+# secrets marked sync: false. The website is best on Vercel (see readme.md, "Deploying"); a Docker
+# service for it is included below in case everything should live in one place.
+services:
+  - type: web
+    name: voicematics-api
+    runtime: docker
+    rootDir: backend
+    dockerfilePath: ./Dockerfile
+    plan: starter            # disks need a paid instance; the free plan loses data on every restart
+    region: oregon
+    healthCheckPath: /health/live
+    numInstances: 1          # single worker: the relay and in-memory state must stay in one process
+    disk:
+      name: voicematics-data
+      mountPath: /app/data
+      sizeGB: 1
+    envVars:
+      - key: REQUIRE_ACCOUNT
+        value: "true"
+      - key: DATABASE_URL
+        value: sqlite:////app/data/omnivoice.db
+      - key: WEB_AUTH_DATABASE_URL
+        value: sqlite:////app/data/web_users.db
+      - key: CORS_ORIGIN_REGEX
+        value: app://[^/\s]*
+      - key: CORS_ORIGINS
+        value: '["https://voicematics.vercel.app"]'   # replace with the website's real origin
+      - key: AUTH_JWT_SECRET
+        generateValue: true
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GROQ_API_KEY
+        sync: false
+
+  - type: web
+    name: voicematics-website
+    runtime: docker
+    dockerfilePath: ./website/Dockerfile
+    dockerContext: .
+    plan: starter
+    region: oregon
+    envVars:
+      - key: NEXT_PUBLIC_BACKEND_URL
+        fromService:
+          type: web
+          name: voicematics-api
+          envVarKey: RENDER_EXTERNAL_URL

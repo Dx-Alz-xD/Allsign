@@ -16,7 +16,7 @@ import { Readout } from '@/components/Readout';
 import { TechSimulator } from '@/components/simulator/TechSimulator';
 import { SessionProvider, useSession } from '@/lib/session';
 
-const INSTALLER_URL = 'https://github.com/Dx-Alz-xD/Allsign/releases/latest/download/Voicematics-Setup.exe';
+const INSTALLER_URL = 'https://github.com/Dx-Alz-xD/Voicematics/releases/latest/download/Voicematics-Setup.exe';
 
 function Page() {
   const { account } = useSession();

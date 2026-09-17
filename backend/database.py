@@ -15,16 +15,25 @@ def _is_sqlite_memory(url: URL) -> bool:
 
 
 def resolve_database_url(raw_url: str) -> URL:
-    """Anchor relative SQLite paths to backend/ so the DB file doesn't depend on the launch directory."""
+    """Anchor relative SQLite paths to backend/ so the DB file doesn't depend on the launch directory, and
+    route Postgres URLs (as hosts hand them out: postgres:// or postgresql://) through the psycopg driver."""
     url = make_url(raw_url)
     if url.get_backend_name() == "sqlite" and not _is_sqlite_memory(url) and not Path(url.database).is_absolute():
         url = url.set(database=str(BACKEND_DIR / url.database))
+    if url.drivername in ("postgres", "postgresql"):
+        url = url.set(drivername="postgresql+psycopg")
     return url
+
+
+def is_postgres(raw_url: str) -> bool:
+    return make_url(raw_url).get_backend_name() in ("postgres", "postgresql")
 
 
 def _engine_options(url: URL) -> dict:
     if url.get_backend_name() != "sqlite":
-        return {}
+        # Hosted Postgres (Render, Neon) closes idle connections and may pause the database: check a pooled
+        # connection before use and retire it after five minutes.
+        return {"pool_pre_ping": True, "pool_recycle": 300}
     options: dict = {"connect_args": {"check_same_thread": False}}
     if _is_sqlite_memory(url):
         # One shared connection, otherwise every pooled connection sees its own empty database.

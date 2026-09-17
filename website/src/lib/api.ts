@@ -58,7 +58,7 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string |
   try {
     response = await fetch(`${backendUrl()}${path}`, { ...init, headers });
   } catch {
-    throw new ApiError(0, 'The Voicematics backend is not reachable. Start it on port 8000 and try again.');
+    throw new ApiError(0, 'Voicematics could not reach its server. If it was idle it is waking up now; try again in a moment.');
   }
   if (!response.ok) {
     const retry = response.headers.get('Retry-After');

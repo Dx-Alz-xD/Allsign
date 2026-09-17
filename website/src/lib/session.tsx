@@ -10,6 +10,8 @@ import type { AccountResponse, AuthCredentials, AuthSessionResponse, Subscriptio
 import { api, ApiError } from '@/lib/api';
 
 const STORAGE_KEY = 'voicematics.session';
+const WAKE_ATTEMPTS = 14;
+const WAKE_INTERVAL_MS = 5000;
 
 interface StoredSession {
   token: string;
@@ -21,7 +23,10 @@ export interface SessionState {
   token: string | null;
   account: AccountResponse | null;
   subscription: Subscription | null;
+  /** null while checking, true when reachable, false when the checks gave up. */
   backendOnline: boolean | null;
+  /** True while the first checks fail: a free-tier server is usually just waking up. */
+  waking: boolean;
   signUp: (credentials: AuthCredentials) => Promise<AuthSessionResponse>;
   signIn: (credentials: AuthCredentials) => Promise<AuthSessionResponse>;
   signOut: () => void;
@@ -58,6 +63,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [account, setAccount] = useState<AccountResponse | null>(null);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
+  const [waking, setWaking] = useState(false);
 
   const loadAccount = useCallback(async (sessionToken: string) => {
     const [me, current] = await Promise.all([api.auth.me(sessionToken), api.billing.subscription(sessionToken)]);
@@ -82,12 +88,22 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      try {
-        await api.health();
-        if (!cancelled) setBackendOnline(true);
-      } catch {
-        if (!cancelled) setBackendOnline(false);
+      // A hosted free-tier server sleeps when idle and takes up to a minute to answer its first request, so
+      // keep asking for a while before calling it offline.
+      let online = false;
+      for (let attempt = 0; attempt < WAKE_ATTEMPTS && !cancelled; attempt++) {
+        try {
+          await api.health();
+          online = true;
+          break;
+        } catch {
+          if (attempt === 0) setWaking(true);
+          await new Promise((resolve) => window.setTimeout(resolve, WAKE_INTERVAL_MS));
+        }
       }
+      if (cancelled) return;
+      setWaking(false);
+      setBackendOnline(online);
       const stored = readStored();
       if (stored) {
         try {
@@ -111,6 +127,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       account,
       subscription,
       backendOnline,
+      waking,
       signUp: async (credentials) => {
         const session = await api.auth.signup(credentials);
         accept(session);
@@ -131,7 +148,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (current !== undefined) setSubscription(current);
       },
     }),
-    [ready, token, account, subscription, backendOnline, accept, signOut, loadAccount],
+    [ready, token, account, subscription, backendOnline, waking, accept, signOut, loadAccount],
   );
 
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;

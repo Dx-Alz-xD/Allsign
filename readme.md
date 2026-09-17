@@ -205,16 +205,21 @@ Gemini is tried first and Groq takes over when a Gemini call fails. With neither
 
 ## Deploying
 
-The API is one long-lived process (WebSocket relay, in-memory throttles, SQLite files), so it runs on a container host with a persistent disk, not on a serverless platform. The website is a normal Next.js app.
+The live setup is free-tier: the website on Vercel, the API on Render with Render's free Postgres.
 
 | Piece | Where | How |
 |---|---|---|
-| API | Fly.io, Railway, Render or any VM with Docker | `backend/Dockerfile`; `backend/fly.toml` is a ready Fly config with a volume on `/app/data` |
-| Website | Vercel (root directory `website`, and enable "Include source files outside of the Root Directory" so `../shared` resolves), or `website/Dockerfile` built from the repository root | set `NEXT_PUBLIC_BACKEND_URL` to the API's public https URL before building |
-| Both on one box | `docker-compose.yml` | `docker compose up --build -d`, then put a TLS reverse proxy (Caddy, nginx, Traefik) in front of ports 8000 and 3100; the API needs WebSocket pass-through on `/ws/signal` |
+| Website | Vercel, project `voicematics` (https://voicematics.vercel.app) | `cd website && vercel deploy --prod`; `NEXT_PUBLIC_BACKEND_URL` is set on the project to the API's public URL |
+| API | Render, from `render.yaml` | Dashboard: New > Blueprint > this repository > Apply. It creates the `voicematics-api` web service (Docker, free plan) and the `voicematics-db` Postgres (free), wires both `*_DATABASE_URL`s, generates `AUTH_JWT_SECRET`, and asks for the model keys |
+| Alternatives | `backend/Dockerfile` + `backend/fly.toml` (Fly.io, paid), `docker-compose.yml` (any VM behind a TLS proxy) | see the comments in each file |
 | Desktop app | `frontend/.env.production` | `NEXT_PUBLIC_BACKEND_URL` and `NEXT_PUBLIC_WEBSITE_URL` set to the public URLs before `npm run electron:start` or a packaged build |
 
-Production settings for the API are listed in `backend/.env.production.example`: a 32+ character `AUTH_JWT_SECRET`, `CORS_ORIGINS` as a JSON list with the website's origin, `REQUIRE_ACCOUNT=true`, and the model keys. Keep the API at a single worker; scaling out needs the relay rooms, trigger cache and throttles moved to a shared store first. The Docker images have not been built on this machine (no Docker here); the website's standalone bundle they copy has been.
+What the free tier means:
+- **Databases:** Render's free Postgres expires 30 days after creation. For a permanent free database, create one on [Neon](https://neon.tech) and point both `DATABASE_URL` and `WEB_AUTH_DATABASE_URL` at it in the service's environment; the account tables use their own `web_auth` schema, so one database serves both. SQLite stays the default for local runs.
+- **Sleep:** the API sleeps after 15 minutes without traffic and takes up to a minute to wake. The website shows "Waking up the server" and keeps checking; the desktop app keeps the last confirmed plan for 7 days.
+- **Memory:** 512 MB. Argon2id logins use 64 MiB each, at most four at once.
+
+Production settings for the API are listed in `backend/.env.production.example`; `CORS_ORIGINS` must contain the website's origin. Keep the API at a single instance: the relay rooms, trigger cache and throttles live in process memory.
 
 ## More
 

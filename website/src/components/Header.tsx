@@ -18,7 +18,7 @@ const NAV = [
 ];
 
 export function Header({ onSignIn, onOpenDashboard }: HeaderProps) {
-  const { account, ready, backendOnline } = useSession();
+  const { account, ready, backendOnline, waking } = useSession();
   const barRef = useRef<HTMLDivElement>(null);
 
   // Past the hero the bar tightens and its bottom edge lights, tied to the scroll position.
@@ -53,8 +53,8 @@ export function Header({ onSignIn, onOpenDashboard }: HeaderProps) {
         </nav>
         <div className="flex items-center gap-3">
           <span className="hidden items-center gap-1.5 text-xs text-smoke sm:flex" title="Local backend on port 8000">
-            <span className={`size-2 rounded-full ${backendOnline ? 'bg-ember shadow-[0_0_8px_#FF6600]' : backendOnline === false ? 'bg-smoke/40' : 'bg-smoke/20'}`} aria-hidden />
-            {backendOnline ? 'Backend online' : backendOnline === false ? 'Backend offline' : 'Checking'}
+            <span className={`size-2 rounded-full ${backendOnline ? 'bg-ember shadow-[0_0_8px_#FF6600]' : backendOnline === false ? 'bg-smoke/40' : waking ? 'animate-pulse bg-ember/70' : 'bg-smoke/20'}`} aria-hidden />
+            {backendOnline ? 'Server online' : backendOnline === false ? 'Server offline' : waking ? 'Waking up the server' : 'Checking the server'}
           </span>
           {ready && account ? (
             <button type="button" onClick={onOpenDashboard} className="btn-secondary px-4 py-2 normal-case tracking-normal">

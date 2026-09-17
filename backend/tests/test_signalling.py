@@ -120,6 +120,8 @@ def test_bad_rooms_and_roles_are_closed_with_4400(client: "TestClient", path: st
         with pytest.raises(WebSocketDisconnect) as closed:
             socket.receive_json()
     assert closed.value.code == signalling.CLOSE_BAD_REQUEST
+    # Longer reasons do not fit in a close frame, and the connection just drops instead.
+    assert len(closed.value.reason.encode()) <= 123
 
 
 @pytest.mark.parametrize("origin", ["http://localhost:3000", "app://omnivoice", "http://127.0.0.1:5173"])

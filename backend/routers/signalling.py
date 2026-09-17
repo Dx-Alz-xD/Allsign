@@ -204,8 +204,8 @@ async def signal(websocket: WebSocket, room: str, role: str = "", client: str = 
     if not ROOM_PATTERN.fullmatch(room) or role not in ALL_ROLES or (client and not CLIENT_PATTERN.fullmatch(client)):
         await websocket.close(
             code=CLOSE_BAD_REQUEST,
-            reason="Use a room of letters, digits, - or _, ?role=speaker, caregiver or alerter, and an optional "
-            "?client id of 8-64 such characters",
+            # A close reason may be at most 123 bytes.
+            reason="Room: letters, digits, - or _. role: speaker, caregiver or alerter. client: 8-64 such characters.",
         )
         return
 

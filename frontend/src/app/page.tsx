@@ -10,6 +10,7 @@ import { AccountProvider, useAccount } from '@/components/providers/AccountProvi
 import { SessionProvider, useSession } from '@/components/providers/SessionProvider';
 import { SettingsProvider } from '@/components/providers/SettingsProvider';
 import { Navbar } from '@/components/ui/Navbar';
+import { Reveal } from '@/components/ui/Reveal';
 import { SessionBar } from '@/components/ui/SessionBar';
 import { Sidebar } from '@/components/ui/Sidebar';
 import { AccessibilityView } from '@/components/views/AccessibilityView';
@@ -162,13 +163,15 @@ function ShellContent({ profile, onProfileChange, muted, onMutedChange }: ShellC
 
             <SessionBar className="mb-6" />
 
-            {view === 'home' && <HomeView state={systemState} onProfileChange={onProfileChange} onSelectView={selectView} />}
-            {view === 'analytics' && <AnalyticsView />}
-            {view === 'triggers' && <TriggersView />}
-            {view === 'caregiver' && <CaregiverView />}
-            {view === 'account' && <AccountView />}
-            {view === 'settings' && <SettingsView />}
-            {view === 'accessibility' && <AccessibilityView />}
+            <Reveal id={view}>
+              {view === 'home' && <HomeView state={systemState} onProfileChange={onProfileChange} onSelectView={selectView} />}
+              {view === 'analytics' && <AnalyticsView />}
+              {view === 'triggers' && <TriggersView />}
+              {view === 'caregiver' && <CaregiverView />}
+              {view === 'account' && <AccountView />}
+              {view === 'settings' && <SettingsView />}
+              {view === 'accessibility' && <AccessibilityView />}
+            </Reveal>
           </div>
         </main>
       </div>

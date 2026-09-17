@@ -126,3 +126,7 @@ npm run dev          # http://localhost:3100 (expects the backend on 8000)
 npm run typecheck
 npm run build
 ```
+
+Motion: both UIs use anime.js (`website/src/lib/motion.ts`, `frontend/src/lib/motion.ts`). Three kinds only: one page-load sequence (the website hero, the desktop sign-in), scroll-linked storytelling on the website, and motion that answers what the person did. Everything checks `reducedMotion()` and settles instantly when it is on; the HUD canvases draw their own frames and stay out of it. The desktop app keeps framer-motion where it already had it (sidebar drawer, profile header, HUD).
+
+Deployment: `backend/Dockerfile` + `backend/fly.toml`, `website/Dockerfile` (build from the repo root), `docker-compose.yml`, and the `*.env.production.example` files. The API stays a single worker. Never commit a filled `.env`; `.env.example` files hold empty keys only.

@@ -1,0 +1,38 @@
+# Voicematics hosted service: the API with its databases on a named volume, and the website.
+#
+#   cp backend/.env.production.example backend/.env   # then fill it in
+#   docker compose up --build -d
+#
+# Put a TLS-terminating reverse proxy (Caddy, nginx, Traefik, or the host's load balancer) in front of both
+# ports; the API needs WebSocket support on /ws/signal. The desktop app is built separately with
+# NEXT_PUBLIC_BACKEND_URL pointing at the API's public https URL.
+services:
+  backend:
+    build: ./backend
+    restart: unless-stopped
+    env_file: backend/.env
+    environment:
+      DATABASE_URL: sqlite:////app/data/omnivoice.db
+      WEB_AUTH_DATABASE_URL: sqlite:////app/data/web_users.db
+    volumes:
+      - voicematics-data:/app/data
+      - voicematics-grammars:/app/grammars
+    ports:
+      - "8000:8000"
+
+  website:
+    build:
+      context: .
+      dockerfile: website/Dockerfile
+      args:
+        # Inlined at build time: the API's public URL as browsers will reach it.
+        NEXT_PUBLIC_BACKEND_URL: ${NEXT_PUBLIC_BACKEND_URL:-http://127.0.0.1:8000}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "3100:3100"
+
+volumes:
+  voicematics-data:
+  voicematics-grammars:

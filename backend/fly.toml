@@ -1,0 +1,38 @@
+# Fly.io deployment of the Voicematics API: one machine, one process, a persistent volume for the databases.
+#   fly launch --no-deploy --copy-config   (once; then set secrets)
+#   fly volumes create voicematics_data --size 1
+#   fly secrets set AUTH_JWT_SECRET=... GEMINI_API_KEY=... CORS_ORIGINS='["https://voicematics.example.com"]'
+#   fly deploy
+app = "voicematics-api"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  REQUIRE_ACCOUNT = "true"
+  DATABASE_URL = "sqlite:////app/data/omnivoice.db"
+  WEB_AUTH_DATABASE_URL = "sqlite:////app/data/web_users.db"
+  CORS_ORIGIN_REGEX = "app://[^/\s]*"
+
+[[mounts]]
+  source = "voicematics_data"
+  destination = "/app/data"
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  auto_stop_machines = "off"   # the relay and in-memory state need the process to stay up
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "20s"
+    method = "GET"
+    path = "/health/live"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "1gb"   # Argon2id uses 64 MiB per hash, up to 4 at once

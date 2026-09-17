@@ -1,6 +1,9 @@
 'use client';
 
+import { useEffect, useRef } from 'react';
+import { animate, onScroll } from 'animejs';
 import { AudioWaveform, UserRound } from 'lucide-react';
+import { reducedMotion } from '@/lib/motion';
 import { useSession } from '@/lib/session';
 
 interface HeaderProps {
@@ -16,10 +19,27 @@ const NAV = [
 
 export function Header({ onSignIn, onOpenDashboard }: HeaderProps) {
   const { account, ready, backendOnline } = useSession();
+  const barRef = useRef<HTMLDivElement>(null);
+
+  // Past the hero the bar tightens and its bottom edge lights, tied to the scroll position.
+  useEffect(() => {
+    const bar = barRef.current;
+    if (!bar || reducedMotion()) return;
+    const run = animate(bar, {
+      height: ['4rem', '3.25rem'],
+      borderBottomColor: ['rgba(255,255,255,0.06)', 'rgba(255,102,0,0.35)'],
+      duration: 1,
+      ease: 'linear',
+      autoplay: onScroll({ target: '#top', enter: 'top top', leave: 'top 280', sync: true }),
+    });
+    return () => {
+      run.revert();
+    };
+  }, []);
 
   return (
-    <header className="fixed inset-x-0 top-0 z-30 border-b border-white/[0.06] bg-obsidian/80 backdrop-blur">
-      <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-6">
+    <header className="fixed inset-x-0 top-0 z-30 bg-obsidian/80 backdrop-blur">
+      <div ref={barRef} className="mx-auto flex h-16 max-w-6xl items-center justify-between border-b border-white/[0.06] px-6">
         <a href="#top" className="flex items-center gap-2 font-display text-lg font-bold text-bone">
           <AudioWaveform aria-hidden className="size-6 text-ember" />
           Voicematics

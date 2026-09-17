@@ -13,6 +13,7 @@ import { TherapyPanel } from '@/components/profiles/TherapyPanel';
 import { VocalAssistPanel } from '@/components/profiles/VocalAssistPanel';
 import { useAccount } from '@/components/providers/AccountProvider';
 import { useSession } from '@/components/providers/SessionProvider';
+import { Reveal } from '@/components/ui/Reveal';
 import { FeatureOverview } from '@/components/views/FeatureOverview';
 import { PROFILE_FEATURE } from '@/lib/account/plans';
 import type { ViewId } from '@/lib/navigation';
@@ -104,17 +105,19 @@ export function HomeView({ state, onProfileChange, onSelectView }: HomeViewProps
         </div>
       </section>
 
-      {!unlocked && requiredFeature && (
-        <LockedFeature feature={requiredFeature}>
-          <p>{LOCKED_PROFILE_DETAILS[state.activeProfile] ?? preset.description}</p>
-        </LockedFeature>
-      )}
-      {unlocked && state.activeProfile === 'clearvoice' && <ClearVoicePanel />}
-      {unlocked && state.activeProfile === 'fluency' && <FluencyPanel />}
-      {unlocked && state.activeProfile === 'vocal_assist' && <VocalAssistPanel />}
-      {unlocked && state.activeProfile === 'therapy' && <TherapyPanel />}
-      {unlocked && state.activeProfile === 'aphasia' && <AphasiaPanel />}
-      {unlocked && state.activeProfile === 'sensory' && <SensoryPanel />}
+      <Reveal id={state.activeProfile} className="space-y-6" step={90}>
+        {!unlocked && requiredFeature && (
+          <LockedFeature feature={requiredFeature}>
+            <p>{LOCKED_PROFILE_DETAILS[state.activeProfile] ?? preset.description}</p>
+          </LockedFeature>
+        )}
+        {unlocked && state.activeProfile === 'clearvoice' && <ClearVoicePanel />}
+        {unlocked && state.activeProfile === 'fluency' && <FluencyPanel />}
+        {unlocked && state.activeProfile === 'vocal_assist' && <VocalAssistPanel />}
+        {unlocked && state.activeProfile === 'therapy' && <TherapyPanel />}
+        {unlocked && state.activeProfile === 'aphasia' && <AphasiaPanel />}
+        {unlocked && state.activeProfile === 'sensory' && <SensoryPanel />}
+      </Reveal>
 
       <section aria-labelledby="status-heading" className="glass rounded-2xl">
         <h2 id="status-heading" className="px-5 pt-4 text-base font-semibold text-ink">

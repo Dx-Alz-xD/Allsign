@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Check, Crown, Sparkles, Zap } from 'lucide-react';
+import { revealOnScroll, tweenNumber } from '@/lib/motion';
 import type { PricingPlan } from '@shared/types';
 import { api } from '@/lib/api';
 import { FALLBACK_PLANS, formatPrice, periodLabel } from '@/lib/plans';
@@ -19,6 +20,18 @@ export function Pricing({ onSubscribe, onCreateAccount, onOpenDashboard }: Prici
   const { account } = useSession();
   const [plans, setPlans] = useState<PricingPlan[]>(FALLBACK_PLANS);
   const [annual, setAnnual] = useState(false);
+  const root = useRef<HTMLElement>(null);
+  const proPriceRef = useRef<HTMLSpanElement>(null);
+  const lastProCents = useRef<number | null>(null);
+
+  useEffect(() => {
+    const section = root.current;
+    if (!section) return;
+    const reveal = revealOnScroll('.plan-card', section, { step: 110, distance: 28 });
+    return () => {
+      reveal?.revert();
+    };
+  }, []);
 
   useEffect(() => {
     api.billing
@@ -34,13 +47,23 @@ export function Pricing({ onSubscribe, onCreateAccount, onOpenDashboard }: Prici
   }, [plans, annual]);
 
   const tier = account?.user.planTier;
+  const proPlan = cards.find((plan) => plan.tier === 'pro');
+
+  // The toggle tweens the Pro figure between the monthly and the yearly price.
+  useEffect(() => {
+    const element = proPriceRef.current;
+    if (!element || !proPlan) return;
+    const from = lastProCents.current ?? proPlan.priceCents;
+    tweenNumber(element, from / 100, proPlan.priceCents / 100, (value) => formatPrice(Math.round(value * 100)));
+    lastProCents.current = proPlan.priceCents;
+  }, [proPlan]);
 
   return (
-    <section id="pricing" className="mx-auto max-w-6xl scroll-mt-20 px-6 py-20">
+    <section ref={root} id="pricing" className="mx-auto max-w-6xl scroll-mt-20 px-6 py-20">
       <div className="flex flex-wrap items-end justify-between gap-6">
         <div>
-          <p className="text-xs font-bold uppercase tracking-[0.3em] text-ember">Pricing</p>
-          <h2 className="mt-3 font-display text-3xl font-bold text-bone sm:text-4xl">Start free, upgrade when you need more</h2>
+          <h2 className="max-w-2xl font-display text-3xl font-bold text-bone sm:text-4xl">Start free, upgrade when you need more</h2>
+          <p className="mt-3 max-w-xl text-smoke">Start free. Pro adds the feedback, therapy and caregiver tools; Lifetime is Pro, paid once.</p>
         </div>
         <div className="flex items-center gap-3 text-sm">
           <span className={annual ? 'text-smoke' : 'text-bone'}>Monthly</span>
@@ -66,7 +89,7 @@ export function Pricing({ onSubscribe, onCreateAccount, onOpenDashboard }: Prici
           const featured = plan.tier === 'pro';
           const current = tier === plan.tier;
           return (
-            <li key={plan.id} className={`relative flex flex-col rounded-2xl border p-6 ${featured ? 'border-ember/70 bg-onyx shadow-ember' : 'border-white/10 bg-onyx/70'}`}>
+            <li key={plan.id} className={`plan-card relative flex flex-col rounded-2xl border p-6 opacity-0 ${featured ? 'border-ember/70 bg-onyx shadow-ember' : 'border-white/10 bg-onyx/70'}`}>
               {featured && <span className="absolute -top-3 left-6 rounded-full bg-ember-edge px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-obsidian">Most chosen</span>}
               <div className="flex items-center gap-3">
                 <span className="grid size-10 place-items-center rounded-xl bg-ember/10 ring-1 ring-ember/40">
@@ -74,8 +97,8 @@ export function Pricing({ onSubscribe, onCreateAccount, onOpenDashboard }: Prici
                 </span>
                 <h3 className="font-display text-lg font-semibold text-bone">{plan.name}</h3>
               </div>
-              <p className="mt-5 font-display text-4xl font-bold text-bone">
-                {formatPrice(plan.priceCents)}
+              <p className="mt-5 font-display text-4xl font-bold tabular-nums text-bone">
+                {plan.tier === 'pro' ? <span ref={proPriceRef}>{formatPrice(plan.priceCents)}</span> : formatPrice(plan.priceCents)}
                 <span className="text-base font-normal text-smoke">{periodLabel(plan)}</span>
               </p>
               {plan.id === 'pro_annual' && <p className="mt-1 text-xs text-smoke">{formatPrice(Math.round(plan.priceCents / 12))} a month, billed yearly</p>}

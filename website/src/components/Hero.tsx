@@ -1,9 +1,15 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { createScope, animate, stagger } from 'animejs';
+import { animate, createTimeline, scrambleText, splitText, stagger } from 'animejs';
 import { Cpu, Download, Play, ShieldCheck, Timer } from 'lucide-react';
 import { WaveformGrid } from '@/components/WaveformGrid';
+import { reducedMotion } from '@/lib/motion';
+
+const HEADLINE = 'Sub-15ms Assistive Speech Realignment. Audio Stays On-Device.';
+const SUBHEADLINE = 'No Audio Uploads. No AI in the Speech Path. Direct OS Integration.';
+// The subheadline first appears the way garbled speech reaches the grammar engine, then snaps into order.
+const GARBLED = 'Uploads No Audio. Path the No AI Speech in. OS Direct Integration.';
 
 const BADGES = [
   { icon: Timer, text: 'Sub-15 ms analysis' },
@@ -15,64 +21,61 @@ interface HeroProps {
   onDownload: () => void;
 }
 
+/**
+ * The one page-load sequence on the site: the signal floor boots, the headline is set down character by
+ * character, the subheadline arrives out of order and is rebuilt (the product's own trick), then the
+ * badges and buttons take their places.
+ */
 export function Hero({ onDownload }: HeroProps) {
   const root = useRef<HTMLElement>(null);
+  const headlineRef = useRef<HTMLHeadingElement>(null);
+  const subRef = useRef<HTMLParagraphElement>(null);
 
   useEffect(() => {
-    const scope = createScope({ root }).add(() => {
-      // Staggered entrance: headline words, then the subheadline, badges and buttons.
-      animate('.hero-word', {
-        opacity: [0, 1],
-        y: [28, 0],
-        filter: ['blur(8px)', 'blur(0px)'],
-        duration: 900,
-        delay: stagger(60, { start: 120 }),
-        ease: 'outExpo',
-      });
-      animate('.hero-sub', {
-        opacity: [0, 1],
-        y: [16, 0],
-        duration: 800,
-        delay: stagger(120, { start: 520 }),
-        ease: 'outCubic',
-      });
-      animate('.hero-badge', {
-        opacity: [0, 1],
-        scale: [0.85, 1],
-        duration: 600,
-        delay: stagger(90, { start: 900 }),
-        ease: 'outBack(1.6)',
-      });
-      animate('.hero-cta', {
-        opacity: [0, 1],
-        y: [12, 0],
-        duration: 700,
-        delay: stagger(140, { start: 1150 }),
-        ease: 'outCubic',
-      });
-    });
-    return () => scope.revert();
+    const section = root.current;
+    const headline = headlineRef.current;
+    const sub = subRef.current;
+    if (!section || !headline || !sub) return;
+    const rest = section.querySelectorAll<HTMLElement>('.hero-badge, .hero-cta, .hero-meta');
+
+    if (reducedMotion()) {
+      headline.style.opacity = '1';
+      sub.style.opacity = '1';
+      sub.textContent = SUBHEADLINE;
+      rest.forEach((element) => (element.style.opacity = '1'));
+      return;
+    }
+
+    const split = splitText(headline, { chars: { wrap: 'clip' }, words: { wrap: 'clip' } });
+    headline.style.opacity = '1';
+    sub.style.opacity = '1';
+    sub.textContent = GARBLED;
+
+    const sequence = createTimeline({ defaults: { ease: 'outExpo' } })
+      .add(split.chars, { y: ['110%', '0%'], rotate: [4, 0], duration: 900, delay: stagger(14, { start: 500 }) }, 0)
+      .add(sub, { innerHTML: scrambleText({ text: SUBHEADLINE, chars: 'uppercase', duration: 1100 }), duration: 1100, ease: 'linear' }, 1250)
+      .add(section.querySelectorAll('.hero-badge'), { opacity: [0, 1], scale: [0.85, 1], duration: 600, delay: stagger(90), ease: 'outBack(1.6)' }, 1800)
+      .add(section.querySelectorAll('.hero-cta'), { opacity: [0, 1], y: [14, 0], duration: 700, delay: stagger(140) }, 2050)
+      .add(section.querySelectorAll('.hero-meta'), { opacity: [0, 1], duration: 800 }, 2300);
+
+    return () => {
+      sequence.revert();
+      split.revert();
+    };
   }, []);
 
-  const headline = 'Sub-15ms Assistive Speech Realignment. Audio Stays On-Device.'.split(' ');
-
   return (
-    <section ref={root} id="top" className="relative isolate overflow-hidden pb-24 pt-28 sm:pt-36">
-      <WaveformGrid className="absolute inset-0 -z-10 h-full w-full opacity-90" />
-      <div className="absolute inset-0 -z-10 bg-[radial-gradient(ellipse_at_top,rgba(255,102,0,0.14),transparent_60%)]" aria-hidden />
+    <section ref={root} id="top" className="relative isolate overflow-hidden pb-28 pt-32 sm:pt-40">
+      <WaveformGrid className="absolute inset-0 -z-10 h-full w-full" />
+      <div className="absolute inset-x-0 bottom-0 -z-10 h-40 bg-gradient-to-t from-obsidian to-transparent" aria-hidden />
       <div className="mx-auto max-w-6xl px-6">
-        <h1 className="max-w-4xl font-display text-4xl font-bold leading-tight text-bone sm:text-6xl">
-          {headline.map((word, index) => (
-            <span key={`${word}-${index}`} className="hero-word inline-block opacity-0">
-              {word.includes('15ms') || word === 'On-Device.' ? <span className="ember-text">{word}</span> : word}
-              &nbsp;
-            </span>
-          ))}
+        <h1 ref={headlineRef} className="max-w-4xl font-display text-[2.6rem] font-bold leading-[1.05] text-bone opacity-0 sm:text-6xl lg:text-7xl">
+          {HEADLINE}
         </h1>
-        <p className="hero-sub mt-6 max-w-2xl text-lg text-smoke opacity-0 sm:text-xl">
-          No Audio Uploads. No AI in the Speech Path. Direct OS Integration.
+        <p ref={subRef} aria-label={SUBHEADLINE} className="mt-7 max-w-2xl font-mono text-base text-ember opacity-0 sm:text-lg">
+          {SUBHEADLINE}
         </p>
-        <ul className="mt-8 flex flex-wrap gap-2">
+        <ul className="mt-9 flex flex-wrap gap-2">
           {BADGES.map(({ icon: Icon, text }) => (
             <li key={text} className="hero-badge badge opacity-0">
               <Icon aria-hidden className="size-3.5 text-ember" />
@@ -80,7 +83,7 @@ export function Hero({ onDownload }: HeroProps) {
             </li>
           ))}
         </ul>
-        <div className="mt-10 flex flex-wrap gap-3">
+        <div className="mt-10 flex flex-wrap items-center gap-3">
           <button type="button" onClick={onDownload} className="hero-cta btn-primary opacity-0">
             <Download aria-hidden className="size-4" />
             Download Desktop Client
@@ -90,6 +93,9 @@ export function Hero({ onDownload }: HeroProps) {
             Try Live Demo
           </a>
         </div>
+        <p className="hero-meta mt-8 max-w-xl text-sm text-smoke opacity-0">
+          Move your pointer: the signal floor reacts to speed the way the desktop app reacts to your voice.
+        </p>
       </div>
     </section>
   );

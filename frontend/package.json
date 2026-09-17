@@ -20,6 +20,7 @@
   "type": "commonjs",
   "dependencies": {
     "@nut-tree-fork/nut-js": "^4.2.6",
+    "animejs": "^4.5.0",
     "clsx": "^2.1.1",
     "framer-motion": "^13.3.0",
     "lucide-react": "^1.46.0",

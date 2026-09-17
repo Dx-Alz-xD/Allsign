@@ -56,6 +56,15 @@
   }
 }
 
+@keyframes scan {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
 @layer components {
   .glass {
     @apply border border-white/10 bg-white/[0.06] backdrop-blur-xl;

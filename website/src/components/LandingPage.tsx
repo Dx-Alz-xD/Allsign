@@ -10,7 +10,9 @@ import { DownloadSimulation } from '@/components/DownloadSimulation';
 import { Features } from '@/components/Features';
 import { Header } from '@/components/Header';
 import { Hero } from '@/components/Hero';
+import { Pipeline } from '@/components/Pipeline';
 import { Pricing } from '@/components/Pricing';
+import { Readout } from '@/components/Readout';
 import { TechSimulator } from '@/components/simulator/TechSimulator';
 import { SessionProvider, useSession } from '@/lib/session';
 
@@ -28,6 +30,8 @@ function Page() {
       <Header onSignIn={() => setAuthMode('signin')} onOpenDashboard={() => setDashboardOpen(true)} />
       <main>
         <Hero onDownload={() => setDownloadUrl(INSTALLER_URL)} />
+        <Readout />
+        <Pipeline />
         <Features />
         <TechSimulator />
         <Pricing onSubscribe={setCheckoutPlan} onCreateAccount={() => setAuthMode('signup')} onOpenDashboard={() => setDashboardOpen(true)} />

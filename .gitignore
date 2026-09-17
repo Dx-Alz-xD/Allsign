@@ -34,3 +34,5 @@ Thumbs.db
 
 # TypeScript incremental build info
 *.tsbuildinfo
+# Playwright MCP screenshots and snapshots
+.playwright-mcp/

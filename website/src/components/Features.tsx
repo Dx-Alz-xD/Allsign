@@ -1,8 +1,9 @@
 'use client';
 
-import { useRef, type MouseEvent } from 'react';
+import { useEffect, useRef, type MouseEvent } from 'react';
 import { animate, createTimeline } from 'animejs';
 import { AudioLines, Fingerprint, Radio, Shuffle, Waves, Zap, type LucideIcon } from 'lucide-react';
+import { revealOnScroll } from '@/lib/motion';
 
 interface Feature {
   icon: LucideIcon;
@@ -72,7 +73,7 @@ function TiltCard({ icon: Icon, title, text }: Feature) {
       onMouseEnter={onEnter}
       onMouseLeave={onLeave}
       style={{ transformStyle: 'preserve-3d', boxShadow: '0 0 0 1px rgba(255,255,255,0.08)' }}
-      className="relative overflow-hidden rounded-2xl bg-onyx p-6 will-change-transform"
+      className="feature-card relative overflow-hidden rounded-2xl bg-onyx p-6 opacity-0 will-change-transform"
     >
       <div ref={glow} aria-hidden className="pointer-events-none absolute inset-0 opacity-0" />
       <span className="grid size-11 place-items-center rounded-xl bg-ember/10 ring-1 ring-ember/40">
@@ -85,10 +86,21 @@ function TiltCard({ icon: Icon, title, text }: Feature) {
 }
 
 export function Features() {
+  const root = useRef<HTMLElement>(null);
+
+  useEffect(() => {
+    const section = root.current;
+    if (!section) return;
+    const reveal = revealOnScroll('.feature-card', section, { step: 70 });
+    return () => {
+      reveal?.revert();
+    };
+  }, []);
+
   return (
-    <section id="features" className="mx-auto max-w-6xl px-6 py-20">
-      <p className="text-xs font-bold uppercase tracking-[0.3em] text-ember">What runs on your machine</p>
-      <h2 className="mt-3 font-display text-3xl font-bold text-bone sm:text-4xl">Six profiles, one deterministic pipeline</h2>
+    <section ref={root} id="features" className="mx-auto max-w-6xl scroll-mt-20 px-6 py-20">
+      <h2 className="max-w-2xl font-display text-3xl font-bold text-bone sm:text-4xl">Six profiles, one deterministic pipeline</h2>
+      <p className="mt-3 max-w-2xl text-smoke">Pick the profile that fits how you speak. Every one of them runs on your machine.</p>
       <ul className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3" style={{ perspective: '1200px' }}>
         {FEATURES.map((feature) => (
           <TiltCard key={feature.title} {...feature} />

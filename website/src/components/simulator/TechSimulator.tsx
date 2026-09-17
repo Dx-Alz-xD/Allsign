@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
-import { animate } from 'animejs';
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { animate, createTimeline, stagger } from 'animejs';
+import { reducedMotion } from '@/lib/motion';
 import { AudioLines, Braces, Fingerprint, Waves, type LucideIcon } from 'lucide-react';
 import { AcousticHudTab } from '@/components/simulator/AcousticHudTab';
 import { AphasiaTab } from '@/components/simulator/AphasiaTab';
@@ -26,10 +27,39 @@ const TABS: Tab[] = [
 export function TechSimulator() {
   const [active, setActive] = useState(0);
   const panelRef = useRef<HTMLDivElement>(null);
+  const indicatorRef = useRef<HTMLSpanElement>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const mounted = useRef(false);
 
+  // The incoming panel rises into place, its blocks a beat apart; the indicator slides to the chosen tab.
   useEffect(() => {
-    if (panelRef.current) animate(panelRef.current, { opacity: [0, 1], y: [10, 0], duration: 360, ease: 'outCubic' });
+    const panel = panelRef.current;
+    if (!panel || reducedMotion()) return;
+    const blocks = panel.querySelectorAll(':scope > div > *');
+    const run = createTimeline({ defaults: { ease: 'outCubic' } })
+      .add(panel, { opacity: [0, 1], duration: 260 }, 0)
+      .add(blocks.length ? blocks : panel, { y: [18, 0], opacity: [0, 1], duration: 520, delay: stagger(70) }, 0);
+    return () => {
+      run.revert();
+    };
+  }, [active]);
+
+  useLayoutEffect(() => {
+    const indicator = indicatorRef.current;
+    const tab = tabRefs.current[active];
+    if (!indicator || !tab) return;
+    const target = { left: tab.offsetLeft, top: tab.offsetTop, width: tab.offsetWidth, height: tab.offsetHeight };
+    if (!mounted.current || reducedMotion()) {
+      Object.assign(indicator.style, {
+        transform: `translate(${target.left}px, ${target.top}px)`,
+        width: `${target.width}px`,
+        height: `${target.height}px`,
+        opacity: '1',
+      });
+      mounted.current = true;
+      return;
+    }
+    animate(indicator, { translateX: target.left, translateY: target.top, width: target.width, height: target.height, duration: 420, ease: 'outExpo' });
   }, [active]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
@@ -45,11 +75,11 @@ export function TechSimulator() {
 
   return (
     <section id="simulator" className="mx-auto max-w-6xl scroll-mt-20 px-6 py-20">
-      <p className="text-xs font-bold uppercase tracking-[0.3em] text-ember">Live technology simulator</p>
-      <h2 className="mt-3 font-display text-3xl font-bold text-bone sm:text-4xl">Try each engine in the browser</h2>
+      <h2 className="max-w-2xl font-display text-3xl font-bold text-bone sm:text-4xl">Try each engine in the browser</h2>
       <p className="mt-3 max-w-2xl text-smoke">Everything below runs in this tab. The desktop app runs the same maths against your microphone.</p>
 
-      <div role="tablist" aria-label="Technology simulator" onKeyDown={onKeyDown} className="mt-8 grid gap-2 sm:grid-cols-4">
+      <div role="tablist" aria-label="Technology simulator" onKeyDown={onKeyDown} className="relative mt-8 grid gap-2 sm:grid-cols-4">
+        <span ref={indicatorRef} aria-hidden className="pointer-events-none absolute left-0 top-0 rounded-xl border border-ember/70 bg-ember/10 opacity-0 shadow-ember-soft" />
         {TABS.map(({ id, label, caption, icon: Icon }, index) => {
           const selected = index === active;
           return (
@@ -64,7 +94,7 @@ export function TechSimulator() {
               aria-controls={`panel-${id}`}
               tabIndex={selected ? 0 : -1}
               onClick={() => setActive(index)}
-              className={`flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition ${selected ? 'border-ember/70 bg-ember/10 shadow-ember-soft' : 'border-white/10 bg-white/[0.03] hover:border-white/25'}`}
+              className={`relative z-10 flex items-center gap-3 rounded-xl border px-4 py-3 text-left transition-colors ${selected ? 'border-transparent' : 'border-white/10 bg-white/[0.03] hover:border-white/25'}`}
             >
               <Icon aria-hidden className={`size-5 shrink-0 ${selected ? 'text-ember' : 'text-smoke'}`} />
               <span>

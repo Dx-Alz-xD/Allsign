@@ -209,10 +209,16 @@ export type CaregiverMessage =
   | { type: 'transcript'; transcript: CaregiverTranscript };
 
 // Signalling relay (WebSocket /ws/signal/{room}?role=speaker|caregiver|alerter&client=<id>). The relay forwards offer,
-// answer and ice between speaker and caregiver and sends the rest itself. The session token goes in the subprotocols,
-// never the URL: offer ['voicematics.signal', 'voicematics.token.<token>']. Close codes: 4401 the speaker or phone has
-// no valid session, 4402 its plan has no caregiver_link, 4403 the phone's account is not the speaker's, 4409 the role
-// is taken by another device, 4410 this device reconnected and the newer connection replaced this one.
+// answer and ice between speaker and an admitted caregiver and sends the rest itself. The session token goes in the
+// subprotocols, never the URL: offer ['voicematics.signal', 'voicematics.token.<token>']. Close codes: 4401 no valid
+// session (every role needs one when accounts are required), 4402 a speaker or phone whose plan has no caregiver_link,
+// 4403 not allowed (a caregiver the speaker has not approved or has removed, or a speaker / phone on another account
+// than the room's), 4409 the role is taken by another device, 4410 this device reconnected and replaced this connection.
+//
+// Approval: a caregiver hears { type: 'approval' } with 'waiting-for-speaker' (nobody owns the room yet), 'pending'
+// (the speaker is asked) or 'approved' (with whom it now watches), and nothing else about the room until approved.
+// The speaker hears { type: 'access-request' } and answers { type: 'access-decision', id, approve } (or uses
+// /api/caregivers). Approval is per account and lasts until the speaker removes it.
 //
 // `alerter` is the speaker's phone: it sends PhoneAlertRequest and nothing else. The relay delivers the alert to the
 // caregiver and the speaker as { type: 'alert' } and keeps it (up to 10 minutes) until a caregiver answers
@@ -227,8 +233,21 @@ export interface PhoneAlertRequest {
   message: string; // 1 - 200 characters
 }
 
+export interface AccessRequest {
+  id: string; // the allowance id, answered with access-decision or /api/caregivers/{id}/decision
+  username: string;
+  displayName: string;
+  requestedAt: string;
+}
+
+// denied / removed arrive just before the relay closes the caregiver (4403), so the reason survives proxies that drop close frames.
+export type ApprovalStatus = 'waiting-for-speaker' | 'pending' | 'approved' | 'denied' | 'removed';
+
 export type SignalMessage =
   | { type: 'joined'; room: string; role: SignalRole; peerPresent: boolean }
+  | { type: 'approval'; status: ApprovalStatus; speaker: { username: string; displayName: string } | null }
+  | { type: 'access-request'; request: AccessRequest }
+  | { type: 'access-decision'; id: string; approve: boolean }
   | { type: 'alert'; alert: CaregiverAlert }
   | { type: 'alert-sent'; id: string; delivered: boolean }
   | { type: 'alert-ack'; id: string }
@@ -247,6 +266,74 @@ export type LicenseStatus = 'active' | 'inactive' | 'invalid' | 'hardware_mismat
 export interface AuthCredentials {
   email: string;
   password: string; // signup: 8 - 256 characters, hashed with Argon2id
+}
+
+// The sign-up interview (website). Lists are sets of choices; note is the only free text (500 characters).
+export type OnboardingRole = 'myself' | 'someone-i-care-for' | 'clinician' | 'educator' | 'exploring';
+export type OnboardingGoal =
+  | 'type-by-voice'
+  | 'smoother-speech'
+  | 'gestures'
+  | 'caregiver-alerts'
+  | 'therapy-practice'
+  | 'track-progress'
+  | 'calls-and-meetings';
+export type OnboardingSpeech = 'stuttering' | 'cluttering' | 'voice-strain' | 'motor-speech' | 'not-sure' | 'prefer-not-to-say';
+export type OnboardingPlace = 'work' | 'school' | 'home' | 'clinic' | 'online-calls' | 'gaming';
+export type OnboardingExperience = 'new' | 'some' | 'experienced';
+
+export interface OnboardingAnswers {
+  role: OnboardingRole;
+  goals: OnboardingGoal[];
+  speech: OnboardingSpeech[];
+  places: OnboardingPlace[];
+  experience: OnboardingExperience | null;
+  note: string;
+}
+
+// POST /api/auth/signup: username (3 - 20 of a-z 0-9 . _, stored lower-case) and displayName (40) are optional;
+// without a username the account gets one made from the email address.
+export interface SignupRequest extends AuthCredentials {
+  username?: string;
+  displayName?: string;
+  onboarding?: OnboardingAnswers;
+}
+
+// GET / PATCH /api/profile (signed in). PATCH takes any subset; 409 when the username is taken, 422 when invalid.
+export interface Profile {
+  username: string;
+  displayName: string;
+  onboarding: OnboardingAnswers | null;
+  onboardingCompletedAt: string | null;
+  updatedAt: string;
+}
+
+export interface ProfileUpdate {
+  username?: string;
+  displayName?: string;
+  onboarding?: OnboardingAnswers;
+}
+
+// GET /api/profile/username?name=... (no sign-in needed)
+export interface UsernameAvailability {
+  username: string;
+  available: boolean;
+  reason: string | null;
+}
+
+// /api/caregivers (signed in): who may watch whom. username / displayName are the other account's.
+export interface CaregiverAllowance {
+  id: string;
+  username: string;
+  displayName: string;
+  status: 'pending' | 'approved' | 'denied';
+  createdAt: string;
+  decidedAt: string | null;
+}
+
+export interface CaregiverAccessList {
+  caregivers: CaregiverAllowance[]; // accounts that asked to watch me, or that I approved
+  speakers: CaregiverAllowance[]; // accounts I asked to watch, or that approved me
 }
 
 export interface WebUser {
@@ -290,6 +377,7 @@ export interface AccountResponse {
   user: WebUser;
   license: LicenseInfo | null;
   entitlements: Entitlements;
+  profile: Profile | null;
 }
 
 // POST /api/auth/signup (201) and POST /api/auth/login

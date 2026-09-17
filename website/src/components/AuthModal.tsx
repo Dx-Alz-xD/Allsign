@@ -1,44 +1,40 @@
 'use client';
 
 import { useEffect, useState, type FormEvent } from 'react';
-import { Loader2, LogIn, UserPlus } from 'lucide-react';
+import { Loader2, LogIn, Sparkles } from 'lucide-react';
 import { Modal } from '@/components/Modal';
 import { useSession } from '@/lib/session';
 
-export type AuthMode = 'signin' | 'signup';
-
 interface AuthModalProps {
-  mode: AuthMode | null;
+  open: boolean;
   onClose: () => void;
-  onDone: () => void;
+  /** New visitors answer the interview before their account is created. */
+  onCreateAccount: () => void;
 }
 
-export function AuthModal({ mode, onClose, onDone }: AuthModalProps) {
+export function AuthModal({ open, onClose, onCreateAccount }: AuthModalProps) {
   const session = useSession();
-  const [current, setCurrent] = useState<AuthMode>('signin');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (mode) {
-      setCurrent(mode);
+    if (open) {
       setError(null);
       setPassword('');
     }
-  }, [mode]);
+  }, [open]);
 
-  if (!mode) return null;
+  if (!open) return null;
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);
     setError(null);
     try {
-      if (current === 'signup') await session.signUp({ email, password });
-      else await session.signIn({ email, password });
-      onDone();
+      await session.signIn({ email, password });
+      onClose();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
@@ -47,14 +43,7 @@ export function AuthModal({ mode, onClose, onDone }: AuthModalProps) {
   };
 
   return (
-    <Modal open onClose={onClose} title={current === 'signup' ? 'Create your account' : 'Sign in'} locked={busy}>
-      <div className="mb-4 grid grid-cols-2 rounded-lg border border-white/10 p-1 text-sm">
-        {(['signin', 'signup'] as const).map((option) => (
-          <button key={option} type="button" onClick={() => setCurrent(option)} className={`rounded-md py-1.5 font-semibold transition ${current === option ? 'bg-ember/20 text-bone' : 'text-smoke hover:text-bone'}`}>
-            {option === 'signin' ? 'Sign in' : 'Create account'}
-          </button>
-        ))}
-      </div>
+    <Modal open onClose={onClose} title="Sign in" locked={busy}>
       <form onSubmit={submit} className="space-y-4">
         <div>
           <label htmlFor="auth-email" className="label">
@@ -66,24 +55,26 @@ export function AuthModal({ mode, onClose, onDone }: AuthModalProps) {
           <label htmlFor="auth-password" className="label">
             Password
           </label>
-          <input
-            id="auth-password"
-            type="password"
-            required
-            minLength={current === 'signup' ? 8 : 1}
-            autoComplete={current === 'signup' ? 'new-password' : 'current-password'}
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            className="field"
-          />
-          {current === 'signup' && <p className="mt-1 text-xs text-smoke">At least 8 characters. A free licence key is created with the account.</p>}
+          <input id="auth-password" type="password" required autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} className="field" />
         </div>
-        {error && <p className="text-sm text-crimson">{error}</p>}
+        {error && (
+          <p role="alert" className="text-sm text-crimson">
+            {error}
+          </p>
+        )}
         <button type="submit" disabled={busy} className="btn-primary w-full justify-center">
-          {busy ? <Loader2 aria-hidden className="size-4 animate-spin" /> : current === 'signup' ? <UserPlus aria-hidden className="size-4" /> : <LogIn aria-hidden className="size-4" />}
-          {current === 'signup' ? 'Create account' : 'Sign in'}
+          {busy ? <Loader2 aria-hidden className="size-4 animate-spin" /> : <LogIn aria-hidden className="size-4" />}
+          Sign in
         </button>
       </form>
+      <div className="mt-5 rounded-xl border border-white/10 bg-white/[0.03] p-4">
+        <p className="text-sm text-bone">New to Voicematics?</p>
+        <p className="mt-1 text-sm text-smoke">A few quick questions first, so we can suggest where to start. Then your account.</p>
+        <button type="button" onClick={onCreateAccount} disabled={busy} className="btn-secondary mt-3 w-full justify-center">
+          <Sparkles aria-hidden className="size-4 text-ember" />
+          Create an account
+        </button>
+      </div>
     </Modal>
   );
 }

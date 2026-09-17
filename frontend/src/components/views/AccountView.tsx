@@ -164,7 +164,16 @@ export function AccountView() {
 
       <section aria-labelledby="account-plan" className="rounded-3xl bg-neon-edge p-px shadow-neon">
         <div className="rounded-[calc(1.5rem-1px)] bg-void/90 p-6 backdrop-blur-xl sm:p-8">
-          <p className="break-all text-mist">{email}</p>
+          <p className="break-all text-mist">
+            {account?.profile && (
+              <>
+                <span className="font-semibold text-ink">@{account.profile.username}</span>
+                {account.profile.displayName && <span> · {account.profile.displayName}</span>}
+                <span> · </span>
+              </>
+            )}
+            {email}
+          </p>
           <h2 id="account-plan" className="mt-1 text-3xl font-bold text-ink sm:text-4xl">
             Voicematics {PLAN_NAMES[planEntitlements.tier]}
           </h2>

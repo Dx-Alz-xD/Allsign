@@ -187,7 +187,8 @@ export function TermsOfServiceModal({ open, onClose, section }: TermsOfServiceMo
           <p>
             You may use Voicematics for personal communication and in clinical or educational settings. Do not use it to
             impersonate someone, to share another person&apos;s information without their consent, or to break the law.
-            Connect a caregiver only when both of you agree to share.
+            Connect a caregiver only when both of you agree to share: a caregiver signs in and you approve their username,
+            and you can remove them at any time.
           </p>
           <p>
             Services you choose to configure, such as relay servers and the apps you paste into, have their own terms. See

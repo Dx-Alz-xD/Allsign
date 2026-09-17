@@ -338,6 +338,11 @@ export function PrivacyPolicyModal({ open, onClose }: { open: boolean; onClose: 
               computers you stay signed in on. Checkout on the website keeps only the card brand and last four digits.
             </li>
             <li>
+              <strong>Your profile and caregiver approvals.</strong> Your username, an optional display name, your answers to
+              the website&apos;s sign-up questions, and which accounts you approved or denied as caregivers. Others see only
+              your username and display name, and only over the caregiver link.
+            </li>
+            <li>
               <strong>Microphone audio.</strong> Processed in memory on your computer in real time to measure pitch, volume,
               and fluency. Raw audio is not recorded, saved, or uploaded.
             </li>
@@ -384,9 +389,10 @@ export function PrivacyPolicyModal({ open, onClose }: { open: boolean; onClose: 
               go to the Voicematics server and on to Google Gemini or Groq, whose own privacy terms apply to that request.
             </li>
             <li>
-              You connect a caregiver. Shared alerts, readings, and rebuilt sentences travel encrypted between the two
-              devices, through a relay only if a direct connection fails. The Voicematics server sets up the connection and
-              sees the room code and IP addresses, never the shared data. Alerts you send from your phone&apos;s alert button
+              You connect a caregiver you approved. A caregiver must sign in and be approved by you before anything reaches
+              them. Shared alerts, readings, and rebuilt sentences travel encrypted between the two devices, through a relay
+              only if a direct connection fails. The Voicematics server sets up the connection, checks the approval, and
+              sees the room code, both accounts, and IP addresses, never the shared data. Alerts you send from your phone&apos;s alert button
               are the exception: the server passes them to the caregiver, holding them up to 10 minutes if nobody is
               connected, and does not keep them afterwards.
             </li>

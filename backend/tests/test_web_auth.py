@@ -162,7 +162,7 @@ def test_a_short_configured_secret_is_refused(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_account_tables_live_in_their_own_database() -> None:
-    assert set(inspect(web_engine).get_table_names()) == {"users", "license_keys", "subscriptions", "device_sessions"}
+    assert set(inspect(web_engine).get_table_names()) == {"users", "license_keys", "subscriptions", "device_sessions", "profiles", "caregiver_allowances"}
     assert {"license_keys", "subscriptions"}.isdisjoint(inspect(database.engine).get_table_names())
 
 
@@ -173,7 +173,7 @@ def test_signup_creates_an_account_with_a_free_license(client: "TestClient") -> 
     response = signup(client)
     assert response.status_code == 201, response.text
     body = response.json()
-    assert set(body) == {"token", "tokenType", "expiresAt", "user", "license", "entitlements"}
+    assert set(body) == {"token", "tokenType", "expiresAt", "user", "license", "entitlements", "profile"}
     assert body["entitlements"]["tier"] == "free" and body["entitlements"]["triggerLimit"] == 1
     assert "fluency" not in body["entitlements"]["features"]
     assert body["tokenType"] == "bearer"

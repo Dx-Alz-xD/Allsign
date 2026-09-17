@@ -317,9 +317,10 @@ def test_caregiver_relay_needs_pro_for_the_speaker(client: "TestClient"):
     assert signal_close_code(client, "speaker", "not-a-token") == 4401
     assert signal_close_code(client, "speaker", bearer(free)) == 4402
     assert signal_close_code(client, "speaker", bearer(pro)) is None
-    # The caregiver can watch without an account, but a token that is sent must be valid.
-    assert signal_close_code(client, "caregiver") is None
+    # A caregiver needs an account too (any plan), but not a room code alone: see test_caregiver_approval.py.
+    assert signal_close_code(client, "caregiver") == 4401
     assert signal_close_code(client, "caregiver", "not-a-token") == 4401
+    assert signal_close_code(client, "caregiver", bearer(free)) is None
     # The speaker's phone signs in like the speaker.
     assert signal_close_code(client, "alerter") == 4401
     assert signal_close_code(client, "alerter", bearer(free)) == 4402

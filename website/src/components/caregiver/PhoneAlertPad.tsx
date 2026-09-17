@@ -8,11 +8,11 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from 'react';
 import { Check, Clock, LogIn, LogOut, MessageSquare, Radio, Send, Siren, TriangleAlert } from 'lucide-react';
 import type { PhoneAlertRequest } from '@shared/types';
-import { AuthModal } from '@/components/AuthModal';
+import { useAuthFlow } from '@/components/site/SiteProviders';
 import { backendWebSocketUrl } from '@/lib/api';
 import { PhoneAlertLink, type PhoneAlertOutcome, type PhoneLinkState } from '@/lib/peer/phoneAlert';
 import { generateClientId } from '@/lib/peer/caregiverLink';
-import { SessionProvider, useSession } from '@/lib/session';
+import { useSession } from '@/lib/session';
 
 const ROOM_PATTERN = /^[A-Z0-9-]{4,64}$/;
 const ROOM_KEY = 'voicematics.alert-room';
@@ -64,7 +64,7 @@ const OUTCOME_TEXT: Record<SentAlert['outcome']['status'], string> = {
 
 function Pad({ initialRoom }: { initialRoom: string }) {
   const session = useSession();
-  const [authOpen, setAuthOpen] = useState(false);
+  const { openSignIn } = useAuthFlow();
   const [room, setRoom] = useState(initialRoom);
   const [joinedRoom, setJoinedRoom] = useState<string | null>(null);
   const [state, setState] = useState<PhoneLinkState>({ status: 'idle', caregiverPresent: false, error: null });
@@ -156,11 +156,10 @@ function Pad({ initialRoom }: { initialRoom: string }) {
     return (
       <section className="panel space-y-4 p-5">
         <p className="text-bone">Sign in with the same Voicematics account you use in the desktop app. Only that account can send alerts into its room.</p>
-        <button type="button" onClick={() => setAuthOpen(true)} className="btn-primary w-full justify-center">
+        <button type="button" onClick={openSignIn} className="btn-primary w-full justify-center">
           <LogIn aria-hidden className="size-4" />
           Sign in
         </button>
-        <AuthModal mode={authOpen ? 'signin' : null} onClose={() => setAuthOpen(false)} onDone={() => setAuthOpen(false)} />
       </section>
     );
   }
@@ -310,9 +309,5 @@ function Pad({ initialRoom }: { initialRoom: string }) {
 }
 
 export function PhoneAlertPad({ initialRoom }: { initialRoom: string }) {
-  return (
-    <SessionProvider>
-      <Pad initialRoom={initialRoom} />
-    </SessionProvider>
-  );
+  return <Pad initialRoom={initialRoom} />;
 }

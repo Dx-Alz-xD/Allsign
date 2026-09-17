@@ -2,10 +2,11 @@
 
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { animate, stagger } from 'animejs';
-import { Check, Copy, Download, KeyRound, Loader2, Lock } from 'lucide-react';
+import { Check, Copy, Download, KeyRound, Loader2, Lock, Sparkles } from 'lucide-react';
 import type { CheckoutResponse, PricingPlan } from '@shared/types';
 import { Modal } from '@/components/Modal';
-import { ApiError, api } from '@/lib/api';
+import { useAuthFlow } from '@/components/site/SiteProviders';
+import { api } from '@/lib/api';
 import { formatPrice, periodLabel } from '@/lib/plans';
 import { useSession } from '@/lib/session';
 
@@ -43,6 +44,7 @@ function parseExpiry(raw: string): { month: number; year: number } | null {
 
 export function CheckoutModal({ plan, onClose, onDownload }: CheckoutModalProps) {
   const session = useSession();
+  const { openSignUp } = useAuthFlow();
   const [step, setStep] = useState<Step>('account');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -86,12 +88,7 @@ export function CheckoutModal({ plan, onClose, onDownload }: CheckoutModalProps)
     setBusy(true);
     setError(null);
     try {
-      try {
-        await session.signUp({ email, password });
-      } catch (signupError) {
-        if (signupError instanceof ApiError && signupError.status === 409) await session.signIn({ email, password });
-        else throw signupError;
-      }
+      await session.signIn({ email, password });
       setStep('payment');
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
@@ -121,7 +118,7 @@ export function CheckoutModal({ plan, onClose, onDownload }: CheckoutModalProps)
       );
       const remaining = PROCESSING_MIN_MS - (performance.now() - started);
       if (remaining > 0) await new Promise((resolve) => window.setTimeout(resolve, remaining));
-      session.applyAccount({ user: response.user, license: response.license, entitlements: response.entitlements }, response.subscription);
+      session.applyAccount({ user: response.user, license: response.license, entitlements: response.entitlements, profile: null }, response.subscription);
       setResult(response);
       setStep('success');
     } catch (failure) {
@@ -168,7 +165,7 @@ export function CheckoutModal({ plan, onClose, onDownload }: CheckoutModalProps)
 
           {step === 'account' && (
             <form onSubmit={submitAccount} className="space-y-4">
-              <p className="text-sm text-smoke">Sign in or create the account the licence will belong to.</p>
+              <p className="text-sm text-smoke">Sign in to the account the licence will belong to.</p>
               <div>
                 <label htmlFor="co-email" className="label">
                   Email
@@ -179,13 +176,16 @@ export function CheckoutModal({ plan, onClose, onDownload }: CheckoutModalProps)
                 <label htmlFor="co-password" className="label">
                   Password
                 </label>
-                <input id="co-password" type="password" required minLength={8} autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)} className="field" />
-                <p className="mt-1 text-xs text-smoke">At least 8 characters. Stored as an Argon2id hash on the local backend.</p>
+                <input id="co-password" type="password" required autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} className="field" />
               </div>
               {error && <p className="text-sm text-crimson">{error}</p>}
               <button type="submit" disabled={busy} className="btn-primary w-full justify-center">
                 {busy ? <Loader2 aria-hidden className="size-4 animate-spin" /> : <KeyRound aria-hidden className="size-4" />}
                 Continue to payment
+              </button>
+              <button type="button" onClick={openSignUp} className="btn-secondary w-full justify-center">
+                <Sparkles aria-hidden className="size-4 text-ember" />
+                New here? Create an account first
               </button>
             </form>
           )}

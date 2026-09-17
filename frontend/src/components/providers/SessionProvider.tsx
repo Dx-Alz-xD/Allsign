@@ -222,6 +222,10 @@ export interface SessionContextValue {
   remoteTranscripts: CaregiverTranscript[];
   /** Null when no caregiver link is set up; otherwise whether the alert went out now or waits for the connection. */
   sendEmergency: () => Delivery | null;
+  /** Speaker side: answers a caregiver's request to watch (link.accessRequests). */
+  decideAccess: (id: string, approve: boolean) => void;
+  /** Speaker side: forgets a request answered elsewhere, for example by removing that caregiver. */
+  dismissAccessRequest: (id: string) => void;
 
   lastMatch: TriggerMatch | null;
   lastAction: ActionOutcome | null;
@@ -885,6 +889,26 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
 
   useEffect(() => () => linkRef.current?.close(), []);
 
+  const decideAccess = useCallback((id: string, approve: boolean) => linkRef.current?.decideAccess(id, approve), []);
+  const dismissAccessRequest = useCallback((id: string) => linkRef.current?.dismissAccessRequest(id), []);
+
+  // A caregiver asking to watch is worth a notification when Voicematics is in the background.
+  const seenRequestsRef = useRef(new Set<string>());
+  useEffect(() => {
+    for (const request of link?.accessRequests ?? []) {
+      if (seenRequestsRef.current.has(request.id)) continue;
+      seenRequestsRef.current.add(request.id);
+      if (typeof Notification === 'undefined' || document.hasFocus()) continue;
+      const show = () =>
+        new Notification('Voicematics: a caregiver asks to watch you', {
+          body: `${request.displayName || `@${request.username}`} (@${request.username}) is waiting for your approval in Caregiver Link.`,
+          tag: `access-${request.id}`,
+        });
+      if (Notification.permission === 'granted') show();
+      else if (Notification.permission === 'default') void Notification.requestPermission().then((result) => result === 'granted' && show());
+    }
+  }, [link?.accessRequests]);
+
   const sendEmergency = useCallback((): Delivery | null => {
     const alert = makeAlert('emergency', 'Emergency alert raised from the speaker device');
     pushAlert(alert);
@@ -971,6 +995,8 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       remoteTelemetry,
       remoteTranscripts,
       sendEmergency,
+      decideAccess,
+      dismissAccessRequest,
       lastMatch,
       lastAction,
       backendOnline,
@@ -1025,6 +1051,8 @@ export function SessionProvider({ profile, muted, children }: SessionProviderPro
       remoteTelemetry,
       remoteTranscripts,
       sendEmergency,
+      decideAccess,
+      dismissAccessRequest,
       lastMatch,
       lastAction,
       backendOnline,

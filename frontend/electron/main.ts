@@ -1,4 +1,5 @@
 import { app, BrowserWindow, net, protocol, shell, type WebFrameMain } from 'electron';
+import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { registerAccountIpc } from './account';
@@ -19,6 +20,12 @@ const DEV_SERVER_URL = 'http://localhost:3000';
 const APP_SCHEME = 'app';
 const APP_URL = `${APP_SCHEME}://omnivoice/`;
 const STATIC_EXPORT_DIR = path.join(__dirname, '..', 'out');
+
+/** The packaged app ships the icon inside out/; `electron:dev` has no export yet and uses public/. */
+function appIconPath(): string {
+  const exported = path.join(STATIC_EXPORT_DIR, 'app-icon.png');
+  return fs.existsSync(exported) ? exported : path.join(__dirname, '..', 'public', 'app-icon.png');
+}
 
 // Wayland compositors only deliver global shortcuts through the XDG GlobalShortcuts portal, which
 // Chromium keeps behind a feature flag. Must be set before app ready.
@@ -106,6 +113,8 @@ function createWindow(): void {
     minWidth: 360,
     minHeight: 600,
     title: 'Voicematics',
+    // The taskbar / title-bar icon while running; the installer and .exe use build/icon.ico.
+    icon: appIconPath(),
     backgroundColor: '#0B0F17',
     autoHideMenuBar: true,
     webPreferences: {

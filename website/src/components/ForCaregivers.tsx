@@ -2,13 +2,14 @@
 
 import { useEffect, useRef } from 'react';
 import Link from 'next/link';
-import { Bell, MessageSquareText, MonitorSmartphone, Radio } from 'lucide-react';
+import { Bell, MessageSquareText, MonitorSmartphone, Radio, ShieldCheck } from 'lucide-react';
 import { revealOnScroll } from '@/lib/motion';
 
 const POINTS = [
-  { icon: MonitorSmartphone, text: 'Nothing to install and no account. Open the link the speaker sends you, on a phone or a laptop.' },
+  { icon: ShieldCheck, text: 'Nobody watches with a room code alone. You sign in, and the speaker approves your username once; they can remove it any time.' },
+  { icon: MonitorSmartphone, text: 'Nothing to install and no paid plan needed. Open the link the speaker sends you, on a phone or a laptop.' },
   { icon: Radio, text: 'Voice readings, blocks and strain arrive live from their computer over a direct connection.' },
-  { icon: Bell, text: 'Emergency and strain alerts sound in your browser and can notify you when the tab is hidden.' },
+  { icon: Bell, text: 'Emergency and strain alerts sound in your browser, including alerts the speaker sends from their phone.' },
   { icon: MessageSquareText, text: 'Every sentence the app rebuilds shows up as they say it.' },
 ];
 
@@ -29,8 +30,8 @@ export function ForCaregivers() {
         <div>
           <h2 className="max-w-xl font-display text-3xl font-bold text-bone sm:text-4xl">For the people who look after them</h2>
           <p className="mt-4 max-w-xl text-smoke">
-            Caregivers, family and clinicians watch from the browser. The speaker opens Caregiver Link in the desktop app and shares a room code or a link; that
-            is all it takes.
+            Caregivers, family and clinicians watch from the browser. The speaker shares a room code from the desktop app and approves the caregiver&apos;s
+            username; from then on readings and alerts arrive live.
           </p>
           <div className="mt-8 flex flex-wrap gap-3">
             <Link href="/caregiver" className="btn-primary">

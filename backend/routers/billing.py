@@ -53,7 +53,7 @@ PLANS: list[PricingPlan] = [
         name="Pro Monthly",
         priceCents=1499,
         billingPeriod="monthly",
-        features=["Everything in Free", "DAF / FSF Fluency Coach", "Therapy vowel plane", "Unlimited triggers", "Caregiver link", "Session analytics"],
+        features=["Everything in Free", "DAF / FSF Fluency Coach", "Therapy vowel plane", "Unlimited gestures", "Caregiver link with approvals and phone alerts", "Session analytics"],
     ),
     PricingPlan(
         id="pro_annual",

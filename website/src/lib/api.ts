@@ -7,12 +7,18 @@ import type {
   AccountResponse,
   AuthCredentials,
   AuthSessionResponse,
+  CaregiverAccessList,
+  CaregiverAllowance,
   CheckoutRequest,
   CheckoutResponse,
   GrammarRequest,
   GrammarResponse,
   PricingPlan,
+  Profile,
+  ProfileUpdate,
+  SignupRequest,
   Subscription,
+  UsernameAvailability,
 } from '@shared/types';
 
 export const DEFAULT_BACKEND_URL = 'http://127.0.0.1:8000';
@@ -82,19 +88,33 @@ async function request<T>(path: string, init: RequestInit = {}, token?: string |
   return (await response.json()) as T;
 }
 
-const json = (body: unknown): RequestInit => ({ method: 'POST', body: JSON.stringify(body) });
+const json = (body: unknown, method = 'POST'): RequestInit => ({ method, body: JSON.stringify(body) });
 
 export const api = {
   health: () => request<{ status: string }>('/health/live'),
   grammar: (body: GrammarRequest) => request<GrammarResponse>('/api/grammar/translate', json(body)),
   auth: {
-    signup: (body: AuthCredentials) => request<AuthSessionResponse>('/api/auth/signup', json(body)),
+    signup: (body: SignupRequest) => request<AuthSessionResponse>('/api/auth/signup', json(body)),
     login: (body: AuthCredentials) => request<AuthSessionResponse>('/api/auth/login', json(body)),
     me: (token: string) => request<AccountResponse>('/api/auth/me', {}, token),
+    deleteAccount: (password: string, token: string) => request<void>('/api/auth/me/delete', json({ password }), token),
+  },
+  profile: {
+    get: (token: string) => request<Profile>('/api/profile', {}, token),
+    update: (body: ProfileUpdate, token: string) => request<Profile>('/api/profile', json(body, 'PATCH'), token),
+    usernameAvailable: (name: string) => request<UsernameAvailability>(`/api/profile/username?name=${encodeURIComponent(name)}`),
+  },
+  caregivers: {
+    list: (token: string) => request<CaregiverAccessList>('/api/caregivers', {}, token),
+    add: (username: string, token: string) => request<CaregiverAllowance>('/api/caregivers', json({ username }), token),
+    decide: (id: string, approve: boolean, token: string) =>
+      request<CaregiverAllowance>(`/api/caregivers/${encodeURIComponent(id)}/decision`, json({ approve }), token),
+    remove: (id: string, token: string) => request<void>(`/api/caregivers/${encodeURIComponent(id)}`, { method: 'DELETE' }, token),
   },
   billing: {
     plans: () => request<PricingPlan[]>('/api/billing/plans'),
     subscription: (token: string) => request<Subscription | null>('/api/billing/subscription', {}, token),
     checkout: (body: CheckoutRequest, token: string) => request<CheckoutResponse>('/api/billing/checkout', json(body), token),
+    cancel: (token: string) => request<Subscription>('/api/billing/cancel', { method: 'POST' }, token),
   },
 };

@@ -22,6 +22,8 @@ import type {
   AcousticTriggerUpdate,
   AuthCredentials,
   AuthSessionResponse,
+  CaregiverAccessList,
+  CaregiverAllowance,
   GrammarRequest,
   GrammarResponse,
   LicenseVerifyRequest,
@@ -219,6 +221,15 @@ export const api = {
         request<AuthSessionResponse>('/api/auth/devices/session', { method: 'POST', ...json(body) }),
       revoke: (body: DeviceRevokeRequest) => request<void>('/api/auth/devices/revoke', { method: 'POST', ...json(body) }),
     },
+  },
+
+  /** Who may watch whom over the caregiver link (signed in). */
+  caregivers: {
+    list: () => request<CaregiverAccessList>('/api/caregivers', {}, ACCOUNT_TIMEOUT_MS),
+    add: (username: string) => request<CaregiverAllowance>('/api/caregivers', { method: 'POST', ...json({ username }) }, ACCOUNT_TIMEOUT_MS),
+    decide: (id: string, approve: boolean) =>
+      request<CaregiverAllowance>(`/api/caregivers/${encodeURIComponent(id)}/decision`, { method: 'POST', ...json({ approve }) }, ACCOUNT_TIMEOUT_MS),
+    remove: (id: string) => request<void>(`/api/caregivers/${encodeURIComponent(id)}`, { method: 'DELETE' }, ACCOUNT_TIMEOUT_MS),
   },
 
   license: {

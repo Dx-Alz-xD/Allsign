@@ -15,9 +15,14 @@
  *
  * Alerts raised on the speaker's phone arrive over the signalling socket instead
  * (the relay passes them on) and reach `onMessage` like any other alert.
+ *
+ * A caregiver is only connected once the speaker has approved its account: until
+ * then `approval` says why it waits, and the speaker's link collects the
+ * `accessRequests` to answer with `decideAccess`. A caregiver that is turned away
+ * stops trying to reconnect.
  */
 
-import type { CaregiverMessage, CaregiverRole, SignalMessage } from '@shared/types';
+import type { AccessRequest, ApprovalStatus, CaregiverMessage, CaregiverRole, SignalMessage } from '@shared/types';
 import type { PeerLinkState, PeerStatus } from '@/lib/hud/types';
 import { parseCaregiverMessage } from '@/lib/peer/messages';
 import { Outbox, type Delivery, type OutboxChannel } from '@/lib/peer/outbox';
@@ -36,6 +41,12 @@ export interface CaregiverLinkState {
   received: number;
   /** Alerts and sentences waiting for the data channel to open. */
   queued: number;
+  /** Caregiver side: where the speaker's approval stands; null until the relay says. */
+  approval: ApprovalStatus | null;
+  /** Caregiver side: whom this device is watching, once approved. */
+  watching: { username: string; displayName: string } | null;
+  /** Speaker side: caregivers asking to watch, oldest first. */
+  accessRequests: AccessRequest[];
 }
 
 export interface CaregiverLinkOptions {
@@ -60,6 +71,7 @@ const RECONNECT_DELAY_MS = 3000;
 const MAX_RECONNECTS = 5;
 const CLOSE_UNAUTHORIZED = 4401;
 const CLOSE_PLAN_REQUIRED = 4402;
+const CLOSE_FORBIDDEN = 4403;
 const CLOSE_ROLE_TAKEN = 4409;
 const CLOSE_REPLACED = 4410;
 const SIGNAL_PROTOCOL = 'voicematics.signal';
@@ -98,6 +110,9 @@ export class CaregiverLink {
       sent: 0,
       received: 0,
       queued: 0,
+      approval: null,
+      watching: null,
+      accessRequests: [],
     };
   }
 
@@ -112,6 +127,7 @@ export class CaregiverLink {
 
   connect(): void {
     this.closedByUser = false;
+    this.update({ approval: null, watching: null, accessRequests: [], error: null });
     this.openSocket();
   }
 
@@ -159,11 +175,16 @@ export class CaregiverLink {
         return;
       }
       if (event.code === CLOSE_UNAUTHORIZED) {
-        this.update({ status: 'error', error: 'Sign in to your Voicematics account to share as the speaker.' });
+        this.update({ status: 'error', error: role === 'speaker' ? 'Sign in to your Voicematics account to share as the speaker.' : 'Sign in to watch as a caregiver.' });
         return;
       }
       if (event.code === CLOSE_PLAN_REQUIRED) {
         this.update({ status: 'error', error: 'Sharing as the speaker is part of Voicematics Pro.' });
+        return;
+      }
+      if (event.code === CLOSE_FORBIDDEN) {
+        this.teardownConnection();
+        this.update({ status: 'error', peerPresent: false, error: event.reason || 'The speaker has not allowed this account to watch them.' });
         return;
       }
       // A newer connection from this device took over; it owns the link now.
@@ -183,6 +204,27 @@ export class CaregiverLink {
     this.reconnects++;
     if (!this.connected) this.update({ status: 'signalling', error: null });
     this.reconnectTimer = window.setTimeout(() => this.openSocket(), RECONNECT_DELAY_MS);
+  }
+
+  /** Speaker side: answers a caregiver's request. The relay lets an approved caregiver in at once. */
+  decideAccess(id: string, approve: boolean): void {
+    this.sendSignal({ type: 'access-decision', id, approve });
+    this.dismissAccessRequest(id);
+  }
+
+  /** Speaker side: forgets a request that was answered elsewhere (for example on the account page). */
+  dismissAccessRequest(id: string): void {
+    this.update({ accessRequests: this.state.accessRequests.filter((request) => request.id !== id) });
+  }
+
+  private turnedAway(error: string, approval: ApprovalStatus): void {
+    // Stop here: reconnecting would only ask again.
+    this.closedByUser = true;
+    const socket = this.socket;
+    this.socket = null;
+    socket?.close();
+    this.teardownConnection();
+    this.update({ status: 'error', peerPresent: false, approval, error });
   }
 
   private sendSignal(message: SignalMessage): void {
@@ -217,6 +259,22 @@ export class CaregiverLink {
         await this.flushIce();
         break;
       }
+      case 'approval':
+        if (message.status === 'denied' || message.status === 'removed') {
+          this.turnedAway(
+            message.status === 'removed'
+              ? 'The speaker removed your access. Ask them to approve your username again.'
+              : 'The speaker has not approved your username. Ask them to approve it, then connect again.',
+            message.status,
+          );
+          break;
+        }
+        this.update({ approval: message.status, watching: message.speaker ?? this.state.watching, error: null });
+        break;
+      case 'access-request':
+        if (this.options.role !== 'speaker') break;
+        this.update({ accessRequests: [...this.state.accessRequests.filter((request) => request.id !== message.request.id), message.request] });
+        break;
       case 'alert': {
         const parsed = parseCaregiverMessage(message);
         if (!parsed) break;

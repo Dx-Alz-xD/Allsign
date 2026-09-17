@@ -16,7 +16,7 @@ import grammar_engine
 from config import get_settings
 from database import init_db
 from routers import agents as agent_routes
-from routers import auth, billing, phonemes, presets, sessions, signalling, triggers
+from routers import auth, billing, caregivers, phonemes, presets, profile, sessions, signalling, triggers
 from web_auth.database import init_web_db
 
 # Garbled SOV probe so the healthcheck exercises normalization, parsing, ranking and reordering.
@@ -111,6 +111,8 @@ app.include_router(signalling.router)
 app.include_router(auth.router)
 app.include_router(auth.license_router)
 app.include_router(billing.router)
+app.include_router(profile.router)
+app.include_router(caregivers.router)
 app.include_router(agent_routes.router)
 
 

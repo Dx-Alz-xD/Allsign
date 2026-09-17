@@ -8,7 +8,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { animate, stagger } from 'animejs';
 import { ArrowLeft, ChevronRight, CircleHelp, ExternalLink, RotateCcw, Search, X } from 'lucide-react';
-import { HELP, HELP_START, searchHelp, type HelpNode } from '@/lib/help/guide';
+import { HELP, HELP_ANSWER_COUNT, HELP_START, searchHelp, type HelpNode } from '@/lib/help/guide';
 import { reducedMotion } from '@/lib/motion';
 
 export function HelpGuide() {
@@ -19,8 +19,20 @@ export function HelpGuide() {
   const bodyRef = useRef<HTMLDivElement>(null);
 
   const current = HELP.get(trail[trail.length - 1]) ?? HELP.get(HELP_START)!;
-  const results = useMemo(() => searchHelp(query), [query]);
+  const results = useMemo(() => searchHelp(query, 8), [query]);
   const searching = query.trim().length > 1;
+
+  // Other parts of the site (the 404 page, the help page) open the guide, optionally with a search.
+  useEffect(() => {
+    const onOpen = (event: Event) => {
+      const detail = (event as CustomEvent<{ query?: string }>).detail;
+      setOpen(true);
+      setTrail([HELP_START]);
+      setQuery(detail?.query ?? '');
+    };
+    window.addEventListener('voicematics:open-help', onOpen);
+    return () => window.removeEventListener('voicematics:open-help', onOpen);
+  }, []);
 
   useEffect(() => {
     if (open && panelRef.current && !reducedMotion()) {
@@ -63,8 +75,11 @@ export function HelpGuide() {
             </span>
             <div className="min-w-0 flex-1">
               <p className="font-display text-sm font-semibold text-bone">Help</p>
-              <p className="truncate text-xs text-smoke">Answers on this page, nothing sent anywhere</p>
+              <p className="truncate text-xs text-smoke">{HELP_ANSWER_COUNT} answers, nothing sent anywhere</p>
             </div>
+            <a href="/help" className="rounded-lg px-2 py-1 text-xs text-smoke hover:bg-white/10 hover:text-bone">
+              All answers
+            </a>
             <button type="button" onClick={() => setOpen(false)} aria-label="Close help" className="rounded-lg p-1 text-smoke hover:bg-white/10 hover:text-bone">
               <X aria-hidden className="size-4" />
             </button>

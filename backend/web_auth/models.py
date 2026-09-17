@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from models import choice, new_id, utcnow
@@ -91,3 +91,40 @@ class DeviceSession(WebBase):
     createdAt: Mapped[datetime] = mapped_column("created_at", DateTime(timezone=True), default=utcnow)
     lastUsedAt: Mapped[datetime] = mapped_column("last_used_at", DateTime(timezone=True), default=utcnow)
     revokedAt: Mapped[datetime | None] = mapped_column("revoked_at", DateTime(timezone=True))
+
+
+class Profile(WebBase):
+    """The public side of an account: the username others use to approve it as a caregiver, a display name, and
+    the answers to the sign-up interview (JSON, see schemas.OnboardingAnswers). Created with the account, or the
+    first time an older account is read."""
+
+    __tablename__ = "profiles"
+
+    userId: Mapped[str] = mapped_column("user_id", ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    # Stored lower-case, so uniqueness ignores case (web_auth/profiles.py validates the shape).
+    username: Mapped[str] = mapped_column(String(20), unique=True)
+    displayName: Mapped[str] = mapped_column("display_name", String(40), default="")
+    onboarding: Mapped[str | None] = mapped_column(Text)
+    createdAt: Mapped[datetime] = mapped_column("created_at", DateTime(timezone=True), default=utcnow)
+    updatedAt: Mapped[datetime] = mapped_column("updated_at", DateTime(timezone=True), default=utcnow)
+
+    # So a new account and its profile are inserted in that order in one commit.
+    user: Mapped[WebUser] = relationship()
+
+
+AllowanceStatus = Literal["pending", "approved", "denied"]
+
+
+class CaregiverAllowance(WebBase):
+    """Whether a speaker lets another account watch them over the caregiver link. A room code alone is not enough:
+    the relay admits a caregiver only with an approved allowance from the room's speaker."""
+
+    __tablename__ = "caregiver_allowances"
+    __table_args__ = (UniqueConstraint("speaker_id", "caregiver_id", name="uq_caregiver_allowances_pair"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    speakerId: Mapped[str] = mapped_column("speaker_id", ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    caregiverId: Mapped[str] = mapped_column("caregiver_id", ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(choice(AllowanceStatus, "ck_caregiver_allowances_status"), default="pending")
+    createdAt: Mapped[datetime] = mapped_column("created_at", DateTime(timezone=True), default=utcnow)
+    decidedAt: Mapped[datetime | None] = mapped_column("decided_at", DateTime(timezone=True))

@@ -16,7 +16,7 @@ interface Stage {
 const STAGES: Stage[] = [
   { icon: Mic, title: 'Capture', text: '48 kHz in, 16 kHz out. An anti-alias filter and 10 ms chunks, all inside an AudioWorklet.', at: 0.06 },
   { icon: Radar, title: 'Analyse', text: 'FFT, YIN pitch, LPC formants, jitter, shimmer and HNR on every frame, in workers off the UI thread.', at: 0.36 },
-  { icon: Braces, title: 'Rebuild', text: 'Words pass through a context-free grammar. Fillers and repeats go, the sentence comes back in order, under 10 ms.', at: 0.66 },
+  { icon: Braces, title: 'Hear and rebuild', text: 'On-device recognition writes down every word as said; a formal grammar then drops fillers and repeats and orders the sentence in under 10 ms.', at: 0.66 },
   { icon: Send, title: 'Deliver', text: 'Typed into the app you are using, spoken aloud, or sent to a caregiver over a direct peer connection.', at: 0.96 },
 ];
 

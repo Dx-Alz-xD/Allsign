@@ -6,7 +6,7 @@
  */
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
-import type { AccountResponse, AuthCredentials, AuthSessionResponse, Subscription } from '@shared/types';
+import type { AccountResponse, AuthCredentials, AuthSessionResponse, Profile, ProfileUpdate, SignupRequest, Subscription } from '@shared/types';
 import { api, ApiError } from '@/lib/api';
 
 const STORAGE_KEY = 'voicematics.session';
@@ -27,11 +27,13 @@ export interface SessionState {
   backendOnline: boolean | null;
   /** True while the first checks fail: a free-tier server is usually just waking up. */
   waking: boolean;
-  signUp: (credentials: AuthCredentials) => Promise<AuthSessionResponse>;
+  signUp: (request: SignupRequest) => Promise<AuthSessionResponse>;
   signIn: (credentials: AuthCredentials) => Promise<AuthSessionResponse>;
   signOut: () => void;
   refresh: () => Promise<void>;
   applyAccount: (account: AccountResponse, subscription?: Subscription | null) => void;
+  /** Saves profile changes and keeps the account in step with them. */
+  updateProfile: (patch: ProfileUpdate) => Promise<Profile>;
 }
 
 const SessionContext = createContext<SessionState | null>(null);
@@ -74,7 +76,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const accept = useCallback((session: AuthSessionResponse) => {
     writeStored({ token: session.token, expiresAt: session.expiresAt });
     setToken(session.token);
-    setAccount({ user: session.user, license: session.license, entitlements: session.entitlements });
+    setAccount({ user: session.user, license: session.license, entitlements: session.entitlements, profile: session.profile ?? null });
     setSubscription(null);
   }, []);
 
@@ -144,8 +146,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (token) await loadAccount(token);
       },
       applyAccount: (next, current) => {
-        setAccount(next);
+        setAccount((previous) => ({ ...next, profile: next.profile ?? previous?.profile ?? null }));
         if (current !== undefined) setSubscription(current);
+      },
+      updateProfile: async (patch) => {
+        if (!token) throw new ApiError(401, 'Sign in first.');
+        const profile = await api.profile.update(patch, token);
+        setAccount((previous) => (previous ? { ...previous, profile } : previous));
+        return profile;
       },
     }),
     [ready, token, account, subscription, backendOnline, waking, accept, signOut, loadAccount],

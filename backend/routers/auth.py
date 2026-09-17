@@ -1,6 +1,7 @@
 """Voicematics website accounts and desktop licences, stored in data/web_users.db.
 
-- POST /api/auth/signup   create an account with a free licence key, returns a session token
+- POST /api/auth/signup   create an account with a free licence key (and optionally a username and the sign-up
+                          interview answers), returns a session token
 - POST /api/auth/login    check the password, returns a session token and the licence status
 - GET  /api/auth/me       the signed-in account (Authorization: Bearer <token>)
 - POST /api/auth/me/delete  signed in + password: erase the account and everything saved with it
@@ -31,7 +32,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import User, utcnow
+from models import User, new_id, utcnow
 from schemas import (
     AccountDeleteRequest,
     AccountResponse,
@@ -54,6 +55,7 @@ from web_auth.licenses import generate_license_key, hardware_fingerprint, normal
 from web_auth.models import DeviceSession, LicenseKey, WebUser
 from web_auth.passwords import hash_password, needs_rehash, spend_verification, verify_password
 from web_auth.plans import features_for, plan_expires_at, settle_plan, trigger_limit_for
+from web_auth.profiles import UsernameTaken, create_profile, load_profile, profile_out, username_in_use, username_problem
 from web_auth.throttle import LoginThrottle
 from web_auth.tokens import decode_token, issue_token
 
@@ -113,6 +115,7 @@ def session_response(db: Session, user: WebUser, key: LicenseKey | None) -> Auth
         user=WebUserOut.model_validate(user),
         license=license_info(user, key),
         entitlements=granted,
+        profile=profile_out(load_profile(db, user)),
     )
 
 
@@ -124,22 +127,35 @@ def email_taken(db: Session, email: str) -> bool:
 def signup(payload: SignupRequest, db: WebDb) -> AuthSessionResponse:
     email = normalise_email(payload.email)
     conflict = HTTPException(status_code=status.HTTP_409_CONFLICT, detail="An account with this email already exists.")
+    username_conflict = HTTPException(status_code=status.HTTP_409_CONFLICT, detail="That username is taken. Choose another one.")
     if email_taken(db, email):
         raise conflict
+    if payload.username is not None:
+        problem = username_problem(payload.username)
+        if problem:
+            raise HTTPException(status_code=422, detail=problem)
+        if username_in_use(db, payload.username):
+            raise username_conflict
     password_hash = hash_password(payload.password)
 
     for _ in range(SIGNUP_KEY_ATTEMPTS):
         key_string = generate_license_key()
-        user = WebUser(email=email, passwordHash=password_hash, planTier="free", licenseKey=key_string, isActive=True)
+        user = WebUser(id=new_id(), email=email, passwordHash=password_hash, planTier="free", licenseKey=key_string, isActive=True)
         key = LicenseKey(keyString=key_string, user=user, tier="free")
         db.add_all([user, key])
         try:
+            create_profile(db, user, payload.username, payload.displayName, payload.onboarding)
             db.commit()
+        except UsernameTaken:
+            db.rollback()
+            raise username_conflict from None
         except IntegrityError:
             db.rollback()
-            # Either a concurrent signup took the email, or (at 2^-60 odds) the key already exists.
+            # A concurrent signup took the email or the username, or (at 2^-60 odds) the key already exists.
             if email_taken(db, email):
                 raise conflict from None
+            if payload.username is not None and username_in_use(db, payload.username):
+                raise username_conflict from None
             continue
         return session_response(db, user, key)
     raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="Could not allocate a license key.")
@@ -193,7 +209,12 @@ def signed_in_user(
 @router.get("/me", response_model=AccountResponse)
 def me(user: Annotated[WebUser, Depends(signed_in_user)], db: WebDb) -> AccountResponse:
     granted = entitlements(db, user)  # first: settling a lapsed plan may change the user's tier
-    return AccountResponse(user=WebUserOut.model_validate(user), license=license_info(user, current_license(db, user)), entitlements=granted)
+    return AccountResponse(
+        user=WebUserOut.model_validate(user),
+        license=license_info(user, current_license(db, user)),
+        entitlements=granted,
+        profile=profile_out(load_profile(db, user)),
+    )
 
 
 @router.post("/me/delete", status_code=status.HTTP_204_NO_CONTENT)

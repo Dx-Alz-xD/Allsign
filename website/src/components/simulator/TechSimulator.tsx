@@ -18,10 +18,10 @@ interface Tab {
 }
 
 const TABS: Tab[] = [
-  { id: 'clearvoice', label: 'ClearVoice', caption: 'Grammar reordering', icon: Braces, render: () => <ClearVoiceTab /> },
-  { id: 'vocal-bridge', label: 'Vocal Bridge', caption: 'Acoustic triggers', icon: Fingerprint, render: () => <VocalBridgeTab /> },
+  { id: 'clearvoice', label: 'ClearVoice', caption: 'Stutters kept, then tidied', icon: Braces, render: () => <ClearVoiceTab /> },
+  { id: 'gestures', label: 'Gesture Trainer', caption: 'Sounds as actions', icon: Fingerprint, render: () => <VocalBridgeTab /> },
   { id: 'fluency', label: 'Fluency Coach', caption: 'Auditory biofeedback', icon: Waves, render: () => <FluencyTab /> },
-  { id: 'hud', label: 'Acoustic HUD', caption: 'Formant tracking', icon: AudioLines, render: () => <AcousticHudTab /> },
+  { id: 'therapy', label: 'Therapy', caption: 'Vowel plane', icon: AudioLines, render: () => <AcousticHudTab /> },
 ];
 
 export function TechSimulator() {
@@ -75,7 +75,7 @@ export function TechSimulator() {
 
   return (
     <section id="simulator" className="mx-auto max-w-6xl scroll-mt-20 px-6 py-20">
-      <h2 className="max-w-2xl font-display text-3xl font-bold text-bone sm:text-4xl">Try each engine in the browser</h2>
+      <h2 className="max-w-2xl font-display text-3xl font-bold text-bone sm:text-4xl">Try the modes in your browser</h2>
       <p className="mt-3 max-w-2xl text-smoke">Everything below runs in this tab. The desktop app runs the same maths against your microphone.</p>
 
       <div role="tablist" aria-label="Technology simulator" onKeyDown={onKeyDown} className="relative mt-8 grid gap-2 sm:grid-cols-4">

@@ -1,9 +1,10 @@
 'use client';
 
 import { useId, useState, type FormEvent } from 'react';
-import { Copy, Link2, Link2Off, Radio, Siren, Smartphone, TriangleAlert } from 'lucide-react';
+import { CircleCheck, Clock, Copy, Link2, Link2Off, Radio, Siren, Smartphone, TriangleAlert } from 'lucide-react';
 import type { CaregiverRole } from '@shared/types';
 import { ProBadge, UpgradeActions } from '@/components/account/PlanGate';
+import { CaregiverApprovals } from '@/components/caregiver/CaregiverApprovals';
 import { buttonStyles } from '@/components/modals/Modal';
 import { inputStyles } from '@/components/modals/settings/controls';
 import { useAccount } from '@/components/providers/AccountProvider';
@@ -49,7 +50,8 @@ export function CaregiverView() {
     backendOnline,
   } = useSession();
   const latestTranscript = remoteTranscripts[0] ?? null;
-  const { has } = useAccount();
+  const { has, account } = useAccount();
+  const username = account?.profile?.username ?? null;
   const canShare = has('caregiver_link');
   const [room, setRoom] = useState(() => generateRoomCode());
   // Watching needs no plan, so a Free account starts on the side it can use.
@@ -86,8 +88,8 @@ export function CaregiverView() {
           Pair devices
         </h2>
         <p className="mt-1 max-w-prose text-mist">
-          Both devices enter the same room code. The speaker&apos;s app streams volume, pitch, strain and alerts straight to the
-          caregiver&apos;s device; the backend only introduces the two.
+          Both devices enter the same room code. The speaker approves the caregiver&apos;s username once, then volume, pitch, strain and
+          alerts stream straight to the caregiver&apos;s device; the backend only introduces the two.
         </p>
         <form onSubmit={connect} className="mt-4 flex flex-wrap items-end gap-3">
           <div>
@@ -128,7 +130,7 @@ export function CaregiverView() {
               Sharing as the speaker is part of Voicematics Pro <ProBadge />
             </p>
             <p className="mt-1 max-w-prose text-sm text-mist">
-              Anyone can watch as the caregiver for free. To stream your own voice measurements, sentences and emergency alerts
+              Watching as an approved caregiver is free. To stream your own voice measurements, sentences and emergency alerts
               to a caregiver, upgrade your plan.
             </p>
             <div className="mt-3">
@@ -143,12 +145,34 @@ export function CaregiverView() {
           {link && link.queued > 0 && ` · ${link.queued} waiting to send`}
           {link?.error && <span className="text-warn"> · {link.error}</span>}
         </p>
+        {role === 'caregiver' && link?.approval === 'waiting-for-speaker' && (
+          <p className="mt-3 flex items-start gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-mist">
+            <Clock aria-hidden className="mt-0.5 size-4 shrink-0" />
+            Waiting for the speaker to connect with this room code.
+          </p>
+        )}
+        {role === 'caregiver' && link?.approval === 'pending' && (
+          <p className="mt-3 flex items-start gap-2 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-sm text-mist">
+            <Clock aria-hidden className="mt-0.5 size-4 shrink-0" />
+            The speaker has been asked to approve{username ? ` @${username}` : ' your username'}. You connect the moment they do.
+          </p>
+        )}
+        {role === 'caregiver' && link?.approval === 'approved' && (
+          <p className="mt-3 flex items-start gap-2 rounded-xl border border-neon-cyan/40 bg-neon-cyan/10 px-3 py-2 text-sm text-ink">
+            <CircleCheck aria-hidden className="mt-0.5 size-4 shrink-0 text-neon-cyan" />
+            Approved{link.watching ? `: you are watching ${link.watching.displayName || `@${link.watching.username}`}` : ''}.
+          </p>
+        )}
+        {role === 'caregiver' && username && !active && (
+          <p className="mt-3 text-sm text-mist">The speaker approves your username, @{username}. Share it with them before you connect.</p>
+        )}
       </section>
 
       {role === 'speaker' && canShare && (
         <section aria-label="Sharing" className="space-y-4">
+          <CaregiverApprovals />
           <p className="glass flex flex-wrap items-center gap-2 rounded-2xl px-4 py-3 text-sm text-mist">
-            <span>Your caregiver needs no app: send them this link and they can watch from any browser.</span>
+            <span>Your caregiver needs no app: they open this link in any browser, sign in, and you approve their username.</span>
             <code className="rounded bg-black/30 px-2 py-1 text-ink">{websiteUrl(`caregiver?room=${encodeURIComponent(room)}`)}</code>
             <button
               type="button"
@@ -192,7 +216,7 @@ export function CaregiverView() {
               grammarRoundTripMs={latestTranscript?.roundTripMs ?? null}
             />
           ) : (
-            <p className="glass rounded-2xl px-5 py-6 text-mist">The speaker&apos;s telemetry appears here once both devices are in the room.</p>
+            <p className="glass rounded-2xl px-5 py-6 text-mist">The speaker&apos;s telemetry appears here once they have approved you and both devices are in the room.</p>
           )}
         </section>
       )}

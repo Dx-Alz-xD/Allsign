@@ -12,12 +12,12 @@ interface Feature {
 }
 
 const FEATURES: Feature[] = [
-  { icon: Shuffle, title: 'ClearVoice grammar', text: 'A formal context-free grammar rebuilds fragmented speech into a full sentence in under 10 ms. No model guesses.' },
+  { icon: Shuffle, title: 'ClearVoice', text: 'On-device recognition writes down exactly what you said, stutters included, then grammar rules (and optionally Gemini) tidy it. You choose which gets typed.' },
   { icon: Waves, title: 'Fluency Coach', text: 'Delayed and frequency-shifted auditory feedback from an AudioWorklet, adjustable live from 30 to 150 ms.' },
-  { icon: Fingerprint, title: 'Vocal Bridge', text: 'A hum, click or pitch rise becomes a 128-bin spectral fingerprint that types, speaks or alerts on match.' },
-  { icon: AudioLines, title: 'Acoustic HUD', text: 'LPC formants place your vowels on a live F1/F2 plane; jitter, shimmer and HNR flag strain before it hurts.' },
-  { icon: Radio, title: 'Caregiver link', text: 'Telemetry and alerts travel peer to peer over WebRTC. The server only introduces the two devices.' },
-  { icon: Zap, title: 'Direct OS integration', text: 'Rebuilt sentences are typed into whatever app has focus, and triggers can press system shortcuts.' },
+  { icon: Fingerprint, title: 'Gesture Trainer', text: 'A hum, click or pitch rise becomes a 128-bin fingerprint that types a phrase, speaks it, alerts a caregiver or presses keys.' },
+  { icon: AudioLines, title: 'Therapy and Sensory HUD', text: 'LPC formants place your vowels on a live F1/F2 plane; jitter, shimmer and HNR flag strain before it hurts.' },
+  { icon: Radio, title: 'Caregiver link', text: 'Approved caregivers only. Readings and alerts travel peer to peer over WebRTC, and your phone can raise an alert too.' },
+  { icon: Zap, title: 'Direct OS integration', text: 'What you say is typed into whatever app has focus, even while minimised, and gestures can press keyboard shortcuts.' },
 ];
 
 const MAX_TILT_DEG = 9;
@@ -99,7 +99,7 @@ export function Features() {
 
   return (
     <section ref={root} id="features" className="mx-auto max-w-6xl scroll-mt-20 px-6 py-20">
-      <h2 className="max-w-2xl font-display text-3xl font-bold text-bone sm:text-4xl">Six profiles, one deterministic pipeline</h2>
+      <h2 className="max-w-2xl font-display text-3xl font-bold text-bone sm:text-4xl">Six modes, one pipeline on your machine</h2>
       <p className="mt-3 max-w-2xl text-smoke">Pick the profile that fits how you speak. Every one of them runs on your machine.</p>
       <ul className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-3" style={{ perspective: '1200px' }}>
         {FEATURES.map((feature) => (

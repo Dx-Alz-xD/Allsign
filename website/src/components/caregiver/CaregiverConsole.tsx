@@ -1,18 +1,40 @@
 'use client';
 
 /**
- * The caregiver's side of the link, in the browser: enter the room code the speaker shows in the desktop
- * app and watch their voice, alerts and rebuilt sentences live. No install, no account; the data channel is
- * peer to peer, the server only introduces the two devices.
+ * The caregiver's side of the link, in the browser: sign in, enter the room code the speaker shows in the desktop
+ * app, and once the speaker approves your username, watch their voice, alerts and sentences live. A room code alone
+ * shows nothing. No install; the data channel is peer to peer, the server only introduces the two devices.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import { animate } from 'animejs';
-import { Activity, Bell, BellOff, Copy, Link2, Link2Off, MessageSquareText, Radio, Siren, Smartphone, TriangleAlert, Volume2, VolumeX } from 'lucide-react';
-import type { CaregiverAlert, CaregiverMessage, CaregiverTranscript } from '@shared/types';
+import {
+  Activity,
+  Bell,
+  BellOff,
+  CircleCheck,
+  Clock,
+  Copy,
+  Link2,
+  Link2Off,
+  LogIn,
+  MessageSquareText,
+  Radio,
+  ShieldCheck,
+  Siren,
+  Smartphone,
+  Sparkles,
+  TriangleAlert,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
+import type { CaregiverAccessList, CaregiverAlert, CaregiverMessage, CaregiverTranscript } from '@shared/types';
+import { Avatar } from '@/components/site/BrandMark';
+import { useAuthFlow } from '@/components/site/SiteProviders';
 import { CaregiverLink, generateClientId, type CaregiverLinkState, type LinkStatus } from '@/lib/peer/caregiverLink';
-import { backendWebSocketUrl, iceServers } from '@/lib/api';
+import { api, backendWebSocketUrl, iceServers } from '@/lib/api';
 import { reducedMotion } from '@/lib/motion';
+import { useSession } from '@/lib/session';
 
 const ROOM_PATTERN = /^[A-Z0-9-]{4,64}$/;
 const MAX_ALERTS = 50;
@@ -95,7 +117,87 @@ function chime(emergency: boolean) {
   }
 }
 
+/** Signed out, the console explains the approval model and asks for an account; nothing else is reachable. */
 export function CaregiverConsole({ initialRoom }: { initialRoom: string }) {
+  const session = useSession();
+  const { openSignIn, openSignUp } = useAuthFlow();
+  if (!session.ready) {
+    return (
+      <p className="panel p-6 text-smoke" aria-live="polite">
+        {session.waking ? 'Waking the Voicematics server. This can take up to a minute.' : 'Checking your account…'}
+      </p>
+    );
+  }
+  if (!session.account || !session.token) {
+    return (
+      <section aria-labelledby="gate-heading" className="panel overflow-hidden">
+        <div className="grid gap-8 p-6 sm:p-8 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)]">
+          <div>
+            <p className="badge">
+              <ShieldCheck aria-hidden className="size-3.5 text-ember" />
+              Approved caregivers only
+            </p>
+            <h2 id="gate-heading" className="mt-4 font-display text-2xl font-bold text-bone sm:text-3xl">
+              Sign in to watch someone you care for
+            </h2>
+            <p className="mt-3 max-w-prose text-smoke">
+              A room code on its own shows nothing. You sign in, the speaker approves your username in their desktop app, and only then do their readings, alerts
+              and sentences reach you.
+            </p>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button type="button" onClick={openSignIn} className="btn-primary">
+                <LogIn aria-hidden className="size-4" />
+                Sign in
+              </button>
+              <button type="button" onClick={openSignUp} className="btn-secondary">
+                <Sparkles aria-hidden className="size-4 text-ember" />
+                Create a free account
+              </button>
+            </div>
+            {initialRoom && <p className="mt-4 text-sm text-smoke">You opened a link to room {initialRoom}. After signing in you will be connected to it.</p>}
+          </div>
+          <ol className="space-y-4">
+            {[
+              { title: 'Sign in or create a free account', text: 'Caregivers do not need a paid plan. Your username is how the speaker recognises you.' },
+              { title: 'Enter the speaker’s room code', text: 'They see it in the desktop app under Caregiver Link, or send you a link that fills it in.' },
+              { title: 'The speaker approves you', text: 'They get a request with your username and approve it once. They can remove you at any time.' },
+            ].map((item, index) => (
+              <li key={item.title} className="flex gap-3">
+                <span className="grid size-8 shrink-0 place-items-center rounded-full bg-ember/15 font-display text-sm font-bold text-ember ring-1 ring-ember/40">{index + 1}</span>
+                <span>
+                  <span className="block font-semibold text-bone">{item.title}</span>
+                  <span className="mt-0.5 block text-sm text-smoke">{item.text}</span>
+                </span>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
+    );
+  }
+  return <Console initialRoom={initialRoom} />;
+}
+
+function approvalLine(link: CaregiverLinkState | null): { tone: 'wait' | 'ok'; text: string } | null {
+  switch (link?.approval) {
+    case 'waiting-for-speaker':
+      return { tone: 'wait', text: 'Waiting for the speaker to open Caregiver Link with this room code.' };
+    case 'pending':
+      return { tone: 'wait', text: 'The speaker has been asked to approve your username. You connect the moment they do.' };
+    case 'approved':
+      return { tone: 'ok', text: link.watching ? `Approved: you are watching ${link.watching.displayName || `@${link.watching.username}`}.` : 'Approved by the speaker.' };
+    default:
+      return null;
+  }
+}
+
+function Console({ initialRoom }: { initialRoom: string }) {
+  const session = useSession();
+  const tokenRef = useRef(session.token);
+  tokenRef.current = session.token;
+  const username = session.account?.profile?.username ?? '';
+  const [access, setAccess] = useState<CaregiverAccessList | null>(null);
+  const [usernameCopied, setUsernameCopied] = useState(false);
   const [room, setRoom] = useState(initialRoom);
   const [link, setLink] = useState<CaregiverLinkState | null>(null);
   const [live, setLive] = useState<Live | null>(null);
@@ -154,6 +256,7 @@ export function CaregiverConsole({ initialRoom }: { initialRoom: string }) {
         role: 'caregiver',
         room: code,
         clientId: clientId(),
+        getAuthToken: () => tokenRef.current,
         signalUrl: backendWebSocketUrl(),
         iceServers: iceServers(),
         onMessage,
@@ -173,6 +276,15 @@ export function CaregiverConsole({ initialRoom }: { initialRoom: string }) {
   }, []);
 
   useEffect(() => () => linkRef.current?.close(), []);
+
+  // The speakers who approved this account (or were asked to), refreshed whenever the approval changes.
+  useEffect(() => {
+    if (!session.token) return;
+    api.caregivers
+      .list(session.token)
+      .then(setAccess)
+      .catch(() => undefined);
+  }, [session.token, link?.approval]);
 
   // A link in the URL connects straight away, so the speaker can just send it.
   useEffect(() => {
@@ -214,7 +326,20 @@ export function CaregiverConsole({ initialRoom }: { initialRoom: string }) {
     }
   };
 
-  const active = link !== null && link.status !== 'closed' && link.status !== 'idle';
+  const copyUsername = async () => {
+    try {
+      await navigator.clipboard.writeText(username);
+      setUsernameCopied(true);
+      window.setTimeout(() => setUsernameCopied(false), 2000);
+    } catch {
+      setUsernameCopied(false);
+    }
+  };
+
+  const approval = approvalLine(link);
+  const approvedBy = access?.speakers.filter((row) => row.status === 'approved') ?? [];
+  const asked = access?.speakers.filter((row) => row.status === 'pending') ?? [];
+  const active = link !== null && link.status !== 'closed' && link.status !== 'idle' && link.status !== 'error';
   const connected = link?.status === 'connected';
   const stale = live !== null && now - live.at > STALE_AFTER_MS;
   const volumePercent = live ? Math.max(0, Math.min(100, ((live.volumeDb + 60) / 60) * 100)) : 0;
@@ -234,12 +359,29 @@ export function CaregiverConsole({ initialRoom }: { initialRoom: string }) {
       )}
 
       <section aria-labelledby="pair-heading" className="panel p-5 sm:p-6">
-        <h2 id="pair-heading" className="font-display text-xl font-semibold text-bone">
-          Join the speaker&apos;s room
-        </h2>
-        <p className="mt-1 max-w-prose text-smoke">
-          In the desktop app the speaker opens <span className="text-bone">Caregiver Link</span>, chooses <span className="text-bone">speaker</span> and shares the room code. Enter it here.
-        </p>
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 id="pair-heading" className="font-display text-xl font-semibold text-bone">
+              Join the speaker&apos;s room
+            </h2>
+            <p className="mt-1 max-w-prose text-smoke">
+              In the desktop app the speaker opens <span className="text-bone">Caregiver Link</span> and shares the room code. Enter it here; they approve your username
+              once, and you connect.
+            </p>
+          </div>
+          {username && (
+            <div className="flex items-center gap-3 rounded-2xl border border-white/10 bg-black/30 py-2 pl-2 pr-3">
+              <Avatar name={session.account?.profile?.displayName || username} />
+              <div className="min-w-0">
+                <p className="text-xs text-smoke">The speaker approves</p>
+                <p className="font-display font-semibold text-bone">@{username}</p>
+              </div>
+              <button type="button" onClick={() => void copyUsername()} aria-label="Copy your username" className="rounded-lg p-2 text-smoke hover:bg-white/10 hover:text-bone">
+                {usernameCopied ? <CircleCheck aria-hidden className="size-4 text-ember" /> : <Copy aria-hidden className="size-4" />}
+              </button>
+            </div>
+          )}
+        </div>
         <form onSubmit={submit} className="mt-4 flex flex-wrap items-end gap-3">
           <div>
             <label htmlFor="room" className="label">
@@ -271,6 +413,19 @@ export function CaregiverConsole({ initialRoom }: { initialRoom: string }) {
           {link?.roundTripMs !== null && link?.roundTripMs !== undefined && <span>· {link.roundTripMs} ms round trip</span>}
           {link?.error && <span className="text-crimson">· {link.error}</span>}
         </p>
+        {approval && (
+          <p className={`mt-3 flex items-start gap-2 rounded-xl border px-3 py-2 text-sm ${approval.tone === 'ok' ? 'border-ember/40 bg-ember/10 text-bone' : 'border-white/10 bg-black/30 text-smoke'}`} aria-live="polite">
+            {approval.tone === 'ok' ? <CircleCheck aria-hidden className="mt-0.5 size-4 shrink-0 text-ember" /> : <Clock aria-hidden className="mt-0.5 size-4 shrink-0" />}
+            {approval.text}
+          </p>
+        )}
+        {(approvedBy.length > 0 || asked.length > 0) && (
+          <div className="mt-4 flex flex-wrap items-center gap-2 text-sm text-smoke">
+            <ShieldCheck aria-hidden className="size-4 text-ember" />
+            {approvedBy.length > 0 && <span>Approved by {approvedBy.map((row) => row.displayName || `@${row.username}`).join(', ')}.</span>}
+            {asked.length > 0 && <span>Waiting on {asked.map((row) => row.displayName || `@${row.username}`).join(', ')}.</span>}
+          </div>
+        )}
         <div className="mt-4 flex flex-wrap gap-2">
           <button type="button" onClick={() => setSound((value) => !value)} aria-pressed={sound} className="btn-secondary px-4 py-2">
             {sound ? <Volume2 aria-hidden className="size-4" /> : <VolumeX aria-hidden className="size-4" />}

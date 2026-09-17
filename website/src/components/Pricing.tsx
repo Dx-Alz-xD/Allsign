@@ -65,7 +65,7 @@ export function Pricing({ onSubscribe, onCreateAccount, onOpenDashboard }: Prici
           <h2 className="max-w-2xl font-display text-3xl font-bold text-bone sm:text-4xl">Start free, upgrade when you need more</h2>
           <p className="mt-3 max-w-xl text-smoke">Start free. Pro adds the feedback, therapy and caregiver tools; Lifetime is Pro, paid once.</p>
         </div>
-        <div className="flex items-center gap-3 text-sm">
+        <div className="flex flex-wrap items-center gap-3 text-sm">
           <span className={annual ? 'text-smoke' : 'text-bone'}>Monthly</span>
           <button
             type="button"
@@ -73,9 +73,10 @@ export function Pricing({ onSubscribe, onCreateAccount, onOpenDashboard }: Prici
             aria-checked={annual}
             aria-label="Bill annually"
             onClick={() => setAnnual((value) => !value)}
-            className={`relative h-7 w-12 rounded-full border transition ${annual ? 'border-ember bg-ember/40' : 'border-white/20 bg-white/10'}`}
+            className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full border p-0 transition-colors ${annual ? 'border-ember bg-ember/40' : 'border-white/20 bg-white/10'}`}
           >
-            <span className={`absolute top-0.5 size-6 rounded-full bg-bone transition-transform ${annual ? 'translate-x-5' : 'translate-x-0.5'}`} />
+            {/* Anchored to the left edge: a button centres its content, which pushed the knob past the track. */}
+            <span aria-hidden className={`absolute left-0.5 top-1/2 size-5 -translate-y-1/2 rounded-full bg-bone shadow transition-transform duration-200 ${annual ? 'translate-x-5' : 'translate-x-0'}`} />
           </button>
           <span className={annual ? 'text-bone' : 'text-smoke'}>
             Annual <span className="text-ember">save 28%</span>

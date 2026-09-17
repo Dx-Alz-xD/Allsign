@@ -90,7 +90,7 @@ function isUnreachable(error: unknown): boolean {
 }
 
 function accountOf(session: AuthSessionResponse): AccountResponse {
-  return { user: session.user, license: session.license, entitlements: session.entitlements };
+  return { user: session.user, license: session.license, entitlements: session.entitlements, profile: session.profile ?? null };
 }
 
 function stillCurrent(entitlements: Entitlements, now = Date.now()): Entitlements {

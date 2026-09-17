@@ -6,15 +6,15 @@ import { Cpu, Download, Play, ShieldCheck, Timer } from 'lucide-react';
 import { WaveformGrid } from '@/components/WaveformGrid';
 import { reducedMotion } from '@/lib/motion';
 
-const HEADLINE = 'Sub-15ms Assistive Speech Realignment. Audio Stays On-Device.';
-const SUBHEADLINE = 'No Audio Uploads. No AI in the Speech Path. Direct OS Integration.';
+const HEADLINE = 'Heard Exactly, Stutters and All. Audio Stays On-Device.';
+const SUBHEADLINE = 'Word-for-Word Recognition. Typed Into Any App. Caregivers You Approve.';
 // The subheadline first appears the way garbled speech reaches the grammar engine, then snaps into order.
-const GARBLED = 'Uploads No Audio. Path the No AI Speech in. OS Direct Integration.';
+const GARBLED = 'Recognition Word-for-Word. Any App Typed Into. You Approve Caregivers.';
 
 const BADGES = [
   { icon: Timer, text: 'Sub-15 ms analysis' },
   { icon: ShieldCheck, text: 'Audio never leaves your computer' },
-  { icon: Cpu, text: 'DSP, LPC, FFT and a formal grammar' },
+  { icon: Cpu, text: 'Speech recognition runs on your computer' },
 ];
 
 interface HeroProps {

@@ -1,3 +1,4 @@
+import re
 from datetime import datetime, timezone
 from typing import Annotated, Dict, List, Literal, Optional, Union
 
@@ -256,6 +257,37 @@ class SignalError(BaseModel):
     type: Literal["error"] = "error"
     message: str
 
+# Caregiver approval. A caregiver is admitted only when the room's speaker has approved its account; until then it
+# hears `approval` with why it waits, and the speaker hears `access-request`. The speaker answers `access-decision`
+# (or uses /api/caregivers). A denied or removed caregiver is closed with 4403.
+# denied / removed come just before the relay closes the caregiver with 4403, so the reason arrives even where a
+# proxy swallows close frames.
+ApprovalStatus = Literal["waiting-for-speaker", "pending", "approved", "denied", "removed"]
+
+class SignalSpeaker(BaseModel):
+    username: str
+    displayName: str
+
+class SignalApproval(BaseModel):
+    type: Literal["approval"] = "approval"
+    status: ApprovalStatus
+    speaker: Optional[SignalSpeaker] = None  # whom the caregiver is now watching, once approved
+
+class AccessRequestOut(BaseModel):
+    id: str
+    username: str
+    displayName: str
+    requestedAt: UtcDatetime
+
+class SignalAccessRequest(BaseModel):
+    type: Literal["access-request"] = "access-request"
+    request: AccessRequestOut
+
+class SignalAccessDecision(BaseModel):
+    type: Literal["access-decision"]
+    id: Annotated[str, StringConstraints(max_length=64)]
+    approve: bool
+
 # Voicematics website accounts and desktop licences (routers/auth.py). Mirror the Auth* and License* types in
 # shared/types.ts.
 PlanTier = Literal["free", "pro", "lifetime"]
@@ -263,9 +295,65 @@ LicenseStatus = Literal["active", "inactive", "invalid", "hardware_mismatch"]
 MIN_PASSWORD_CHARS = 8
 MAX_PASSWORD_CHARS = 256
 
+# The sign-up interview (website). Every list is a set of choices; `note` is the only free text.
+OnboardingRole = Literal["myself", "someone-i-care-for", "clinician", "educator", "exploring"]
+OnboardingGoal = Literal[
+    "type-by-voice", "smoother-speech", "gestures", "caregiver-alerts", "therapy-practice", "track-progress", "calls-and-meetings",
+]
+OnboardingSpeech = Literal["stuttering", "cluttering", "voice-strain", "motor-speech", "not-sure", "prefer-not-to-say"]
+OnboardingPlace = Literal["work", "school", "home", "clinic", "online-calls", "gaming"]
+OnboardingExperience = Literal["new", "some", "experienced"]
+MAX_NOTE_CHARS = 500
+
+def _unique(values: list) -> list:
+    return list(dict.fromkeys(values))
+
+class OnboardingAnswers(BaseModel):
+    role: OnboardingRole
+    goals: Annotated[List[OnboardingGoal], AfterValidator(_unique)] = Field(default_factory=list, max_length=7)
+    speech: Annotated[List[OnboardingSpeech], AfterValidator(_unique)] = Field(default_factory=list, max_length=6)
+    places: Annotated[List[OnboardingPlace], AfterValidator(_unique)] = Field(default_factory=list, max_length=6)
+    experience: Optional[OnboardingExperience] = None
+    note: Annotated[str, StringConstraints(strip_whitespace=True, max_length=MAX_NOTE_CHARS)] = ""
+
+# Lower-case letters, digits, dots and underscores; 3 - 20 characters; starts and ends with a letter or digit.
+USERNAME_PATTERN = r"^[a-z0-9](?:[a-z0-9._]{1,18})[a-z0-9]$"
+USERNAME_RULES = "Use 3 to 20 letters, digits, dots or underscores, starting and ending with a letter or digit."
+
+def _username(value: str) -> str:
+    value = value.strip().lower()
+    if not re.fullmatch(USERNAME_PATTERN, value):
+        raise ValueError(USERNAME_RULES)
+    return value
+
+Username = Annotated[str, StringConstraints(max_length=64), AfterValidator(_username)]
+DisplayName = Annotated[str, StringConstraints(strip_whitespace=True, max_length=40, pattern=r"^[^\x00-\x1f\x7f]*$")]
+
+class ProfileOut(BaseModel):
+    username: str
+    displayName: str
+    onboarding: Optional[OnboardingAnswers] = None
+    onboardingCompletedAt: Optional[UtcDatetime] = None
+    updatedAt: UtcDatetime
+
+class ProfileUpdate(BaseModel):
+    """Omitted fields keep their value."""
+    username: Optional[Username] = None
+    displayName: Optional[DisplayName] = None
+    onboarding: Optional[OnboardingAnswers] = None
+
+class UsernameAvailability(BaseModel):
+    username: str
+    available: bool
+    reason: Optional[str] = None
+
 class SignupRequest(BaseModel):
     email: EmailStr
     password: Annotated[str, StringConstraints(min_length=MIN_PASSWORD_CHARS, max_length=MAX_PASSWORD_CHARS)]
+    # Both optional: the desktop app signs up with email and password only and gets a generated username.
+    username: Optional[Username] = None
+    displayName: Optional[DisplayName] = None
+    onboarding: Optional[OnboardingAnswers] = None
 
 class LoginRequest(BaseModel):
     email: EmailStr
@@ -303,6 +391,26 @@ class AccountResponse(BaseModel):
     user: WebUserOut
     license: Optional[LicenseInfo] = None
     entitlements: Entitlements
+    profile: Optional[ProfileOut] = None
+
+# Who may watch whom (routers/caregivers.py). `username` / `displayName` are the other account's.
+class CaregiverAllowanceOut(BaseModel):
+    id: str
+    username: str
+    displayName: str
+    status: Literal["pending", "approved", "denied"]
+    createdAt: UtcDatetime
+    decidedAt: Optional[UtcDatetime] = None
+
+class CaregiverAccessList(BaseModel):
+    caregivers: List[CaregiverAllowanceOut]  # accounts that asked for or were given access to watch me
+    speakers: List[CaregiverAllowanceOut]  # accounts I asked to watch, or that approved me
+
+class CaregiverAddRequest(BaseModel):
+    username: Username
+
+class CaregiverDecisionRequest(BaseModel):
+    approve: bool
 
 class AuthSessionResponse(AccountResponse):
     token: str
